@@ -25,116 +25,46 @@ BitrateInfo RistServer::fetchStats()
         return info;
     }
 
-    blog(LOG_DEBUG, "[RistServer] Raw JSON response: %s", response.body.c_str());
-
     JsonUtils::Parser parser(response.body);
     
-    if (!parser.navigateTo("receiver-stats")) {
-        blog(LOG_WARNING, "[RistServer] 'receiver-stats' not found for %s", name_.c_str());
+    // Navigate directly using the path
+    if (!parser.navigateTo({"receiver-stats", "flowinstant", "peers"})) {
+        blog(LOG_WARNING, "[RistServer] Failed to navigate to peers array for %s", name_.c_str());
         return info;
     }
-    blog(LOG_DEBUG, "[RistServer] Found 'receiver-stats'");
-    
-    if (!parser.enterObject()) {
-        blog(LOG_WARNING, "[RistServer] Failed to enter 'receiver-stats' object");
-        return info;
-    }
-    blog(LOG_DEBUG, "[RistServer] Entered 'receiver-stats' object");
-    
-    if (!parser.navigateTo("flowinstant")) {
-        blog(LOG_WARNING, "[RistServer] 'flowinstant' not found for %s", name_.c_str());
-        return info;
-    }
-    blog(LOG_DEBUG, "[RistServer] Found 'flowinstant'");
-    
-    if (!parser.enterObject()) {
-        blog(LOG_WARNING, "[RistServer] Failed to enter 'flowinstant' object");
-        return info;
-    }
-    blog(LOG_DEBUG, "[RistServer] Entered 'flowinstant' object");
-    
-    if (!parser.navigateTo("peers")) {
-        blog(LOG_WARNING, "[RistServer] 'peers' array not found for %s", name_.c_str());
-        return info;
-    }
-    blog(LOG_DEBUG, "[RistServer] Found 'peers' array");
 
     int64_t totalBitrate = 0;
     double totalRtt = 0.0;
     int activePeers = 0;
 
     parser.forEachInArray([&](JsonUtils::Parser& peerParser) {
-        blog(LOG_DEBUG, "[RistServer] Processing peer element...");
-        
-        if (!peerParser.enterObject()) {
-            blog(LOG_DEBUG, "[RistServer] Failed to enter peer object");
-            return;
-        }
-        blog(LOG_DEBUG, "[RistServer] Entered peer object");
-        
-        int dead = 0;
+        // Check dead flag
         if (peerParser.navigateTo("dead")) {
-            dead = peerParser.getInt64(0);
-            blog(LOG_DEBUG, "[RistServer] Peer dead flag: %d", dead);
-        } else {
-            blog(LOG_DEBUG, "[RistServer] 'dead' key not found in peer");
-        }
-        if (dead != 0) {
-            blog(LOG_DEBUG, "[RistServer] Skipping dead peer");
-            return;
+            int dead = peerParser.getInt64(0);
+            if (dead != 0) return;
         }
         
-        if (!peerParser.navigateTo("stats")) {
-            blog(LOG_DEBUG, "[RistServer] 'stats' key not found in peer");
-            return;
-        }
-        blog(LOG_DEBUG, "[RistServer] Found 'stats' key in peer");
+        // Navigate to stats
+        if (!peerParser.navigateTo("stats")) return;
         
         std::string statsStr = peerParser.extractObjectString();
-        if (statsStr.empty()) {
-            blog(LOG_DEBUG, "[RistServer] Failed to extract stats object string");
-            return;
-        }
-        blog(LOG_DEBUG, "[RistServer] Extracted stats object: %s", statsStr.c_str());
+        if (statsStr.empty()) return;
         
         // Parse bitrate
         JsonUtils::Parser statsParser(statsStr);
-        if (!statsParser.enterObject()) {
-            blog(LOG_DEBUG, "[RistServer] Failed to enter stats object");
-            return;
-        }
-        
-        int64_t bitrate = 0;
         if (statsParser.navigateTo("bitrate")) {
-            bitrate = statsParser.getInt64(0);
-            blog(LOG_DEBUG, "[RistServer] Peer bitrate: %lld", bitrate);
-            totalBitrate += bitrate;
-        } else {
-            blog(LOG_DEBUG, "[RistServer] 'bitrate' not found in stats");
+            totalBitrate += statsParser.getInt64(0);
         }
         
-        // Parse RTT using a fresh parser
+        // Parse RTT
         JsonUtils::Parser rttParser(statsStr);
-        if (!rttParser.enterObject()) {
-            blog(LOG_DEBUG, "[RistServer] Failed to enter stats object for RTT");
-            return;
-        }
-        
-        double rtt = 0.0;
         if (rttParser.navigateTo("rtt")) {
-            rtt = rttParser.getDouble(0.0);
-            blog(LOG_DEBUG, "[RistServer] Peer RTT: %f", rtt);
-            if (rtt > 0.0) {
-                totalRtt += rtt;
-            }
-        } else {
-            blog(LOG_DEBUG, "[RistServer] 'rtt' not found in stats");
+            double rtt = rttParser.getDouble(0.0);
+            if (rtt > 0.0) totalRtt += rtt;
         }
         
         activePeers++;
     });
-
-    blog(LOG_DEBUG, "[RistServer] Active peers counted: %d", activePeers);
 
     if (activePeers == 0) {
         blog(LOG_INFO, "[RistServer] No active peers for %s", name_.c_str());
@@ -144,9 +74,6 @@ BitrateInfo RistServer::fetchStats()
     info.bitrateKbps = totalBitrate / 1024;
     info.rttMs = totalRtt / activePeers;
     info.isOnline = info.bitrateKbps > 0;
-    
-    blog(LOG_DEBUG, "[RistServer] %s: %lld kbps, %.1f ms RTT, %d peers", 
-         name_.c_str(), info.bitrateKbps, info.rttMs, activePeers);
 
     return info;
 }
