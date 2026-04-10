@@ -18,22 +18,26 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+          
       - name: Install Qt
         uses: jurplel/install-qt-action@v3
         with:
           version: '6.7.2'
           arch: 'win64_msvc2019_64'
           cache: true
+          
       - name: Cache OBS Studio source
         id: cache-obs
         uses: actions/cache@v4
         with:
           path: obs-studio
           key: obs-studio-official-x64
+          
       - name: Clone OBS Studio (official)
         if: steps.cache-obs.outputs.cache-hit != 'true'
         shell: pwsh
@@ -42,12 +46,14 @@ jobs:
           cd obs-studio
           git submodule update --init --recursive --depth 1
           cd ..
+          
       - name: Cache OBS deps
         id: cache-deps
         uses: actions/cache@v4
         with:
           path: obs-deps
           key: obs-deps-2025-08-23-x64
+          
       - name: Download OBS deps
         if: steps.cache-deps.outputs.cache-hit != 'true'
         shell: pwsh
@@ -55,27 +61,47 @@ jobs:
           $depsUrl = "https://github.com/obsproject/obs-deps/releases/download/2025-08-23/windows-deps-2025-08-23-x64.zip"
           Invoke-WebRequest -Uri $depsUrl -OutFile deps.zip
           Expand-Archive deps.zip -DestinationPath obs-deps
+          
       - name: Cache CURL
         id: cache-curl
         uses: actions/cache@v4
         with:
           path: curl
-          key: curl-latest-x64
+          key: curl-latest-x64-v2
+          
       - name: Download CURL for x64
         if: steps.cache-curl.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri "https://curl.se/windows/latest.cgi?p=win64-mingw.zip" -OutFile curl.zip
-          Expand-Archive curl.zip -DestinationPath curl-download
-          $curlFolder = Get-ChildItem curl-download -Directory | Select-Object -First 1
-          Move-Item "$($curlFolder.FullName)/*" curl/
-          Remove-Item curl-download -Recurse
+          Expand-Archive curl.zip -DestinationPath curl-temp
+          
+          # Find the extracted folder (it's usually something like curl-8.x.x-win64-mingw)
+          $extractedFolder = Get-ChildItem -Path curl-temp -Directory | Select-Object -First 1
+          
+          # Create the curl directory structure
+          New-Item -ItemType Directory -Force -Path curl/bin
+          New-Item -ItemType Directory -Force -Path curl/include
+          New-Item -ItemType Directory -Force -Path curl/lib
+          
+          # Copy files to the expected structure
+          Copy-Item "$($extractedFolder.FullName)/bin/*" curl/bin/ -Recurse -ErrorAction SilentlyContinue
+          Copy-Item "$($extractedFolder.FullName)/include/*" curl/include/ -Recurse -ErrorAction SilentlyContinue
+          Copy-Item "$($extractedFolder.FullName)/lib/*" curl/lib/ -Recurse -ErrorAction SilentlyContinue
+          
+          # Also copy files from root if they exist
+          Copy-Item "$($extractedFolder.FullName)/*.dll" curl/bin/ -ErrorAction SilentlyContinue
+          
+          # Cleanup
+          Remove-Item curl-temp -Recurse -Force
+          
       - name: Cache OBS build
         id: cache-obs-build
         uses: actions/cache@v4
         with:
           path: obs-studio/build_x64
           key: obs-build-official-x64
+          
       - name: Build OBS Libraries (x64)
         if: steps.cache-obs-build.outputs.cache-hit != 'true'
         shell: pwsh
@@ -84,34 +110,95 @@ jobs:
           cmake -B build_x64 -S . -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DENABLE_BROWSER=OFF -DENABLE_SCRIPTING=OFF -DENABLE_UI=ON -DENABLE_PLUGINS=OFF -DENABLE_VIRTUALCAM=OFF -DCMAKE_PREFIX_PATH="${{ github.workspace }}/obs-deps"
           cmake --build build_x64 --config Release --target libobs obs-frontend-api -- /m
           cd ..
+          
       - name: Configure Plugin (x64)
         shell: pwsh
         run: |
           $obsDir = "${{ github.workspace }}/obs-studio"
           $curlDir = "${{ github.workspace }}/curl"
           $obsBuildDir = "$obsDir/build_x64"
-          cmake -B build -S . -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$env:Qt6_DIR;${{ github.workspace }}/obs-deps;$obsBuildDir" -Dlibobs_DIR="$obsBuildDir/libobs" -Dobs-frontend-api_DIR="$obsBuildDir/UI/obs-frontend-api" -Dw32-pthreads_DIR="$obsBuildDir/deps/w32-pthreads" -DCURL_INCLUDE_DIR="$curlDir/include" -DCURL_LIBRARY="$curlDir/lib/libcurl.dll.a"
+          
+          # Find curl library
+          $curlLib = Get-ChildItem -Path $curlDir -Filter "*.dll.a" -Recurse | Select-Object -First 1
+          if (-not $curlLib) { 
+            $curlLib = Get-ChildItem -Path $curlDir -Filter "*.lib" -Recurse | Select-Object -First 1 
+          }
+          if (-not $curlLib) {
+            Write-Host "CURL library not found, using default path"
+            $curlLibPath = "$curlDir/lib/libcurl.dll.a"
+          } else {
+            $curlLibPath = $curlLib.FullName
+          }
+          
+          # Find curl include
+          $curlInclude = Get-ChildItem -Path $curlDir -Directory -Filter "include" -Recurse | Select-Object -First 1
+          if (-not $curlInclude) {
+            $curlIncludePath = "$curlDir/include"
+          } else {
+            $curlIncludePath = $curlInclude.FullName
+          }
+          
+          Write-Host "CURL Library: $curlLibPath"
+          Write-Host "CURL Include: $curlIncludePath"
+          
+          cmake -B build -S . -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_PREFIX_PATH="$env:Qt6_DIR;${{ github.workspace }}/obs-deps;$obsBuildDir" `
+            -Dlibobs_DIR="$obsBuildDir/libobs" `
+            -Dobs-frontend-api_DIR="$obsBuildDir/UI/obs-frontend-api" `
+            -Dw32-pthreads_DIR="$obsBuildDir/deps/w32-pthreads" `
+            -DCURL_INCLUDE_DIR="$curlIncludePath" `
+            -DCURL_LIBRARY="$curlLibPath"
+            
       - name: Build Plugin (x64)
         run: cmake --build build --config Release
+        
       - name: Package (x64)
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "release/obs-plugins/64bit", "release/data/obs-plugins/${{ env.PLUGIN_NAME }}"
+          
+          # Copy plugin DLL
           Copy-Item "build/Release/${{ env.PLUGIN_NAME }}.dll" "release/obs-plugins/64bit/"
-          $curlDll = Get-ChildItem -Path "curl/bin" -Filter "*.dll" | Select-Object -First 1
-          if ($curlDll) { Copy-Item $curlDll.FullName "release/obs-plugins/64bit/" }
-          if (Test-Path "data") { Copy-Item -Recurse "data/*" "release/data/obs-plugins/${{ env.PLUGIN_NAME }}/" }
+          
+          # Find and copy curl DLL (multiple possible locations)
+          $curlDll = Get-ChildItem -Path curl -Filter "*.dll" -Recurse | Where-Object { 
+            $_.Name -match "libcurl" -and $_.Directory.Name -match "bin" 
+          } | Select-Object -First 1
+          
+          if (-not $curlDll) {
+            $curlDll = Get-ChildItem -Path curl -Filter "*.dll" -Recurse | Select-Object -First 1
+          }
+          
+          if ($curlDll) { 
+            Write-Host "Copying curl DLL: $($curlDll.FullName)"
+            Copy-Item $curlDll.FullName "release/obs-plugins/64bit/" 
+          } else {
+            Write-Host "Warning: curl DLL not found"
+          }
+          
+          # Copy data files
+          if (Test-Path "data") { 
+            Copy-Item -Recurse "data/*" "release/data/obs-plugins/${{ env.PLUGIN_NAME }}/" 
+          }
+          
+          # List packaged files for verification
+          Write-Host "Packaged files:"
+          Get-ChildItem release -Recurse | ForEach-Object { Write-Host $_.FullName }
+          
       - name: Build Installer (x64)
         shell: pwsh
         run: |
           $version = (Select-String -Path CMakeLists.txt -Pattern 'project\(.+ VERSION (.+)\)').Matches.Groups[1].Value
           choco install nsis -y --no-progress
           & "C:\Program Files (x86)\NSIS\makensis.exe" /DPLUGIN_VERSION=$version installer.nsi
+          
       - name: Upload Artifacts (x64)
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.PLUGIN_NAME }}-windows-x64
           path: release/
+          
       - name: Upload Installer
         uses: actions/upload-artifact@v4
         with:
