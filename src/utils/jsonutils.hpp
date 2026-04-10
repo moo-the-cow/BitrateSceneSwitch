@@ -1,4 +1,3 @@
-// jsonutils.hpp
 #pragma once
 
 #include <string>
@@ -13,41 +12,6 @@ class Parser {
 private:
     const std::string& json_;
     size_t pos_;
-
-    // Extract the current object (starting at '{') as a string
-    std::string extractObjectString() {
-        skipWhitespace();
-        if (pos_ >= json_.length() || json_[pos_] != '{') return "";
-        size_t start = pos_;
-        int depth = 1;
-        bool inString = false;
-        bool escaped = false;
-        pos_++; // skip '{'
-        while (pos_ < json_.length()) {
-            char c = json_[pos_++];
-            if (escaped) {
-                escaped = false;
-                continue;
-            }
-            if (c == '\\') {
-                escaped = true;
-                continue;
-            }
-            if (c == '"') {
-                inString = !inString;
-                continue;
-            }
-            if (inString) continue;
-            if (c == '{') depth++;
-            if (c == '}') {
-                depth--;
-                if (depth == 0) {
-                    return json_.substr(start, pos_ - start);
-                }
-            }
-        }
-        return "";
-    }
 
     void skipWhitespace() {
         while (pos_ < json_.length() && std::isspace(json_[pos_])) {
@@ -64,7 +28,6 @@ private:
         return false;
     }
 
-    // Find a key at the current object level
     bool findKeyInCurrentObject(const std::string& key) {
         size_t startPos = pos_;
         std::string searchKey = "\"" + key + "\"";
@@ -96,12 +59,10 @@ private:
             if (c == '{') braceDepth++;
             if (c == '}') {
                 braceDepth--;
-                if (braceDepth < 0) break; // Exited current object
+                if (braceDepth < 0) break;
             }
             
-            // Look for key at the current level only
             if (braceDepth == 0 && json_.substr(i, searchKey.length()) == searchKey) {
-                // Verify it's followed by :
                 size_t colonPos = json_.find(':', i + searchKey.length());
                 if (colonPos != std::string::npos) {
                     bool valid = true;
@@ -126,29 +87,24 @@ private:
 public:
     explicit Parser(const std::string& json) : json_(json), pos_(0) {}
     
-    // Reset parser to beginning
     void reset() {
         pos_ = 0;
     }
     
-    // Get current position
     size_t position() const {
         return pos_;
     }
     
-    // Navigate to a key (searches from current position)
     bool navigateTo(const std::string& key) {
         skipWhitespace();
         return findKeyInCurrentObject(key);
     }
     
-    // Navigate through a path of keys
     bool navigateTo(const std::vector<std::string>& path) {
         size_t savedPos = pos_;
         
         for (size_t i = 0; i < path.size(); i++) {
             if (i > 0) {
-                // Enter the object from previous navigation
                 if (!enterObject()) {
                     pos_ = savedPos;
                     return false;
@@ -162,14 +118,12 @@ public:
         return true;
     }
     
-    // Enter an object (move past '{')
     bool enterObject() {
         skipWhitespace();
         if (pos_ >= json_.length() || json_[pos_] != '{') {
             return false;
         }
         
-        // Find matching closing brace
         int depth = 1;
         bool inString = false;
         bool escaped = false;
@@ -198,8 +152,7 @@ public:
             if (c == '}') {
                 depth--;
                 if (depth == 0) {
-                    // Found matching brace, but stay at the start
-                    pos_++; // Move past '{'
+                    pos_++;
                     return true;
                 }
             }
@@ -207,13 +160,11 @@ public:
         return false;
     }
     
-    // Enter an array (move past '[')
     bool enterArray() {
         skipWhitespace();
         return expect('[');
     }
     
-    // Iterate over array elements
     void forEachInArray(const std::function<void(Parser&)>& callback) {
         size_t savedPos = pos_;
         
@@ -250,10 +201,8 @@ public:
             if (c == ']') {
                 depth--;
                 if (depth == 0) {
-                    // Process last element if exists
                     if (elementStart < i) {
                         size_t len = i - elementStart;
-                        // Skip trailing comma
                         while (len > 0 && (json_[elementStart + len - 1] == ',' || 
                                           std::isspace(json_[elementStart + len - 1]))) {
                             len--;
@@ -268,9 +217,7 @@ public:
             }
             
             if (depth == 1 && c == ',') {
-                // Process element
                 size_t len = i - elementStart;
-                // Skip trailing comma and whitespace
                 while (len > 0 && (json_[elementStart + len - 1] == ',' || 
                                   std::isspace(json_[elementStart + len - 1]))) {
                     len--;
@@ -286,7 +233,6 @@ public:
         pos_ = savedPos;
     }
     
-    // Get string value
     std::string getString() {
         skipWhitespace();
         if (!expect('"')) return "";
@@ -310,7 +256,6 @@ public:
         return result;
     }
     
-    // Get number value as string
     std::string getNumberString() {
         skipWhitespace();
         std::string result;
@@ -328,7 +273,6 @@ public:
         return result;
     }
     
-    // Get value as string (handles all types)
     std::string getValueAsString() {
         skipWhitespace();
         if (pos_ >= json_.length()) return "";
@@ -338,7 +282,6 @@ public:
         } else if (json_[pos_] == '-' || (json_[pos_] >= '0' && json_[pos_] <= '9')) {
             return getNumberString();
         } else {
-            // Boolean or null
             std::string result;
             while (pos_ < json_.length() && std::isalpha(json_[pos_])) {
                 result += json_[pos_++];
@@ -347,7 +290,6 @@ public:
         }
     }
     
-    // Get integer value
     int64_t getInt64(int64_t defaultValue = 0) {
         std::string str = getValueAsString();
         if (str.empty() || str == "null") return defaultValue;
@@ -359,7 +301,6 @@ public:
         }
     }
     
-    // Get double value
     double getDouble(double defaultValue = 0.0) {
         std::string str = getValueAsString();
         if (str.empty() || str == "null") return defaultValue;
@@ -371,7 +312,6 @@ public:
         }
     }
     
-    // Get boolean value
     bool getBool(bool defaultValue = false) {
         std::string str = getValueAsString();
         if (str == "true") return true;
@@ -379,7 +319,6 @@ public:
         return defaultValue;
     }
     
-    // Check if current value is null
     bool isNull() {
         skipWhitespace();
         if (pos_ + 4 <= json_.length() && json_.substr(pos_, 4) == "null") {
@@ -388,7 +327,6 @@ public:
         return false;
     }
     
-    // Skip current value
     void skipValue() {
         skipWhitespace();
         if (pos_ >= json_.length()) return;
@@ -404,26 +342,22 @@ public:
         } else if (c == '[') {
             enterArray();
         } else {
-            // Skip boolean or null
             while (pos_ < json_.length() && std::isalpha(json_[pos_])) {
                 pos_++;
             }
         }
     }
     
-    // Extract nested object as string
     std::string extractObjectString() {
         skipWhitespace();
-        if (pos_ >= json_.length() || json_[pos_] != '{') {
-            return "";
-        }
+        if (pos_ >= json_.length() || json_[pos_] != '{') return "";
         
         size_t start = pos_;
         int depth = 1;
         bool inString = false;
         bool escaped = false;
         
-        pos_++; // Skip opening brace
+        pos_++;
         
         while (pos_ < json_.length()) {
             char c = json_[pos_++];

@@ -27,7 +27,6 @@ BitrateInfo RistServer::fetchStats()
 
     JsonUtils::Parser parser(response.body);
     
-    // Navigate to peers array
     if (!parser.navigateTo("receiver-stats")) {
         blog(LOG_WARNING, "[RistServer] 'receiver-stats' not found for %s", name_.c_str());
         return info;
@@ -50,39 +49,34 @@ BitrateInfo RistServer::fetchStats()
     int activePeers = 0;
 
     parser.forEachInArray([&](JsonUtils::Parser& peerParser) {
-        // Enter peer object
         if (!peerParser.enterObject()) return;
         
-        // Check dead flag
         int dead = 0;
         if (peerParser.navigateTo("dead")) {
             dead = peerParser.getInt64(0);
         }
-        if (dead != 0) return; // skip dead peers
+        if (dead != 0) return;
         
-        // Navigate to stats object
         if (!peerParser.navigateTo("stats")) return;
         
-        // Extract stats object as a separate string to parse independently
         std::string statsStr = peerParser.extractObjectString();
         if (statsStr.empty()) return;
         
         JsonUtils::Parser statsParser(statsStr);
-        statsParser.enterObject(); // position inside stats object
+        statsParser.enterObject();
         
-        // Get bitrate
         int64_t bitrate = 0;
         if (statsParser.navigateTo("bitrate")) {
             bitrate = statsParser.getInt64(0);
             totalBitrate += bitrate;
         }
         
-        // Reset and re-enter to get rtt (order-independent)
-        statsParser = JsonUtils::Parser(statsStr);
-        statsParser.enterObject();
+        JsonUtils::Parser rttParser(statsStr);
+        rttParser.enterObject();
+        
         double rtt = 0.0;
-        if (statsParser.navigateTo("rtt")) {
-            rtt = statsParser.getDouble(0.0);
+        if (rttParser.navigateTo("rtt")) {
+            rtt = rttParser.getDouble(0.0);
             if (rtt > 0.0) {
                 totalRtt += rtt;
             }
