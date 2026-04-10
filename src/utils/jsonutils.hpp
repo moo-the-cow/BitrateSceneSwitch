@@ -14,6 +14,41 @@ private:
     const std::string& json_;
     size_t pos_;
 
+    // Extract the current object (starting at '{') as a string
+    std::string extractObjectString() {
+        skipWhitespace();
+        if (pos_ >= json_.length() || json_[pos_] != '{') return "";
+        size_t start = pos_;
+        int depth = 1;
+        bool inString = false;
+        bool escaped = false;
+        pos_++; // skip '{'
+        while (pos_ < json_.length()) {
+            char c = json_[pos_++];
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (c == '\\') {
+                escaped = true;
+                continue;
+            }
+            if (c == '"') {
+                inString = !inString;
+                continue;
+            }
+            if (inString) continue;
+            if (c == '{') depth++;
+            if (c == '}') {
+                depth--;
+                if (depth == 0) {
+                    return json_.substr(start, pos_ - start);
+                }
+            }
+        }
+        return "";
+    }
+
     void skipWhitespace() {
         while (pos_ < json_.length() && std::isspace(json_[pos_])) {
             pos_++;
