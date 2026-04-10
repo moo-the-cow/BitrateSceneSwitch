@@ -29,7 +29,6 @@ private:
     }
 
     bool findKeyInCurrentObject(const std::string& key) {
-        size_t startPos = pos_;
         std::string searchKey = "\"" + key + "\"";
         
         int braceDepth = 0;
@@ -59,28 +58,26 @@ private:
             if (c == '{') braceDepth++;
             if (c == '}') {
                 braceDepth--;
-                if (braceDepth < 0) break;
+                if (braceDepth < 0) {
+                    // We've exited the current object without finding the key
+                    return false;
+                }
             }
             
+            // Only look for keys at the current object level (braceDepth == 0)
             if (braceDepth == 0 && json_.substr(i, searchKey.length()) == searchKey) {
-                size_t colonPos = json_.find(':', i + searchKey.length());
-                if (colonPos != std::string::npos) {
-                    bool valid = true;
-                    for (size_t j = i + searchKey.length(); j < colonPos; j++) {
-                        if (!std::isspace(json_[j])) {
-                            valid = false;
-                            break;
-                        }
-                    }
-                    if (valid) {
-                        pos_ = colonPos + 1;
-                        return true;
-                    }
+                // Verify it's followed by colon with optional whitespace
+                size_t colonPos = i + searchKey.length();
+                while (colonPos < json_.length() && std::isspace(json_[colonPos])) {
+                    colonPos++;
+                }
+                if (colonPos < json_.length() && json_[colonPos] == ':') {
+                    pos_ = colonPos + 1;
+                    return true;
                 }
             }
         }
         
-        pos_ = startPos;
         return false;
     }
 
@@ -123,41 +120,8 @@ public:
         if (pos_ >= json_.length() || json_[pos_] != '{') {
             return false;
         }
-        
-        int depth = 1;
-        bool inString = false;
-        bool escaped = false;
-        
-        for (size_t i = pos_ + 1; i < json_.length(); i++) {
-            char c = json_[i];
-            
-            if (escaped) {
-                escaped = false;
-                continue;
-            }
-            
-            if (c == '\\') {
-                escaped = true;
-                continue;
-            }
-            
-            if (c == '"' && !escaped) {
-                inString = !inString;
-                continue;
-            }
-            
-            if (inString) continue;
-            
-            if (c == '{') depth++;
-            if (c == '}') {
-                depth--;
-                if (depth == 0) {
-                    pos_++;
-                    return true;
-                }
-            }
-        }
-        return false;
+        pos_++; // Skip the '{'
+        return true;
     }
     
     bool enterArray() {
@@ -208,7 +172,8 @@ public:
                             len--;
                         }
                         if (len > 0) {
-                            Parser elementParser(json_.substr(elementStart, len));
+                            std::string elementStr = json_.substr(elementStart, len);
+                            Parser elementParser(elementStr);
                             callback(elementParser);
                         }
                     }
@@ -223,7 +188,8 @@ public:
                     len--;
                 }
                 if (len > 0) {
-                    Parser elementParser(json_.substr(elementStart, len));
+                    std::string elementStr = json_.substr(elementStart, len);
+                    Parser elementParser(elementStr);
                     callback(elementParser);
                 }
                 elementStart = i + 1;
@@ -338,9 +304,51 @@ public:
         } else if (c == '-' || (c >= '0' && c <= '9')) {
             getNumberString();
         } else if (c == '{') {
-            enterObject();
+            int depth = 1;
+            bool inString = false;
+            bool escaped = false;
+            pos_++;
+            while (pos_ < json_.length() && depth > 0) {
+                char ch = json_[pos_++];
+                if (escaped) {
+                    escaped = false;
+                    continue;
+                }
+                if (ch == '\\') {
+                    escaped = true;
+                    continue;
+                }
+                if (ch == '"' && !escaped) {
+                    inString = !inString;
+                    continue;
+                }
+                if (inString) continue;
+                if (ch == '{') depth++;
+                if (ch == '}') depth--;
+            }
         } else if (c == '[') {
-            enterArray();
+            int depth = 1;
+            bool inString = false;
+            bool escaped = false;
+            pos_++;
+            while (pos_ < json_.length() && depth > 0) {
+                char ch = json_[pos_++];
+                if (escaped) {
+                    escaped = false;
+                    continue;
+                }
+                if (ch == '\\') {
+                    escaped = true;
+                    continue;
+                }
+                if (ch == '"' && !escaped) {
+                    inString = !inString;
+                    continue;
+                }
+                if (inString) continue;
+                if (ch == '[') depth++;
+                if (ch == ']') depth--;
+            }
         } else {
             while (pos_ < json_.length() && std::isalpha(json_[pos_])) {
                 pos_++;
