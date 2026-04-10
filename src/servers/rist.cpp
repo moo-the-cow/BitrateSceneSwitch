@@ -28,59 +28,80 @@ BitrateInfo RistServer::fetchStats()
     JsonUtils::Parser parser(response.body);
     
     // Navigate to peers array
-    if (!parser.navigateTo({"receiver-stats", "flowinstant", "peers"})) {
-        blog(LOG_WARNING, "[RistServer] Failed to find peers array for %s", name_.c_str());
+    if (!parser.navigateTo("receiver-stats")) {
+        blog(LOG_WARNING, "[RistServer] 'receiver-stats' not found for %s", name_.c_str());
+        return info;
+    }
+    parser.enterObject();
+    
+    if (!parser.navigateTo("flowinstant")) {
+        blog(LOG_WARNING, "[RistServer] 'flowinstant' not found for %s", name_.c_str());
+        return info;
+    }
+    parser.enterObject();
+    
+    if (!parser.navigateTo("peers")) {
+        blog(LOG_WARNING, "[RistServer] 'peers' array not found for %s", name_.c_str());
         return info;
     }
 
     int64_t totalBitrate = 0;
     double totalRtt = 0.0;
-    int peerCount = 0;
+    int activePeers = 0;
 
     parser.forEachInArray([&](JsonUtils::Parser& peerParser) {
-        // Check if peer is dead
-        if (peerParser.navigateTo("dead")) {
-            int dead = peerParser.getInt64(0);
-            if (dead != 0) {
-                return; // Skip dead peers
-            }
-        }
+        // Enter peer object
+        if (!peerParser.enterObject()) return;
         
-        // Navigate to peer's stats
-        if (!peerParser.navigateTo("stats")) {
-            return;
+        // Check dead flag
+        int dead = 0;
+        if (peerParser.navigateTo("dead")) {
+            dead = peerParser.getInt64(0);
         }
+        if (dead != 0) return; // skip dead peers
+        
+        // Navigate to stats object
+        if (!peerParser.navigateTo("stats")) return;
+        
+        // Extract stats object as a separate string to parse independently
+        std::string statsStr = peerParser.extractObjectString();
+        if (statsStr.empty()) return;
+        
+        JsonUtils::Parser statsParser(statsStr);
+        statsParser.enterObject(); // position inside stats object
         
         // Get bitrate
-        if (peerParser.navigateTo("bitrate")) {
-            int64_t bitrate = peerParser.getInt64(0);
+        int64_t bitrate = 0;
+        if (statsParser.navigateTo("bitrate")) {
+            bitrate = statsParser.getInt64(0);
             totalBitrate += bitrate;
         }
         
-        // Get RTT
-        peerParser.reset(); // Go back to start of stats object
-        if (peerParser.navigateTo("rtt")) {
-            double rtt = peerParser.getDouble(0.0);
+        // Reset and re-enter to get rtt (order-independent)
+        statsParser = JsonUtils::Parser(statsStr);
+        statsParser.enterObject();
+        double rtt = 0.0;
+        if (statsParser.navigateTo("rtt")) {
+            rtt = statsParser.getDouble(0.0);
             if (rtt > 0.0) {
                 totalRtt += rtt;
             }
         }
         
-        peerCount++;
+        activePeers++;
     });
 
-    if (peerCount == 0) {
+    if (activePeers == 0) {
         blog(LOG_INFO, "[RistServer] No active peers for %s", name_.c_str());
         return info;
     }
 
-    // Convert bitrate from bits/s to kbps
     info.bitrateKbps = totalBitrate / 1024;
-    info.rttMs = (totalRtt > 0) ? (totalRtt / peerCount) : 0.0;
+    info.rttMs = totalRtt / activePeers;
     info.isOnline = info.bitrateKbps > 0;
     
     blog(LOG_DEBUG, "[RistServer] %s: %lld kbps, %.1f ms RTT, %d peers", 
-         name_.c_str(), info.bitrateKbps, info.rttMs, peerCount);
+         name_.c_str(), info.bitrateKbps, info.rttMs, activePeers);
 
     return info;
 }
@@ -106,9 +127,7 @@ BitrateInfo RistServer::getBitrate()
 std::string RistServer::getSourceInfo()
 {
     BitrateInfo info = fetchStats();
-    if (!info.isOnline) {
-        return "Offline";
-    }
+    if (!info.isOnline) return "Offline";
 
     std::ostringstream ss;
     ss << info.bitrateKbps << " Kbps, " 
