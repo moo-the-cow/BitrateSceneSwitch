@@ -1163,16 +1163,19 @@ void SettingsDialog::saveSettings()
 
 void SettingsDialog::onApply()
 {
+    statusTimer_->stop();
     saveSettings();
     if (switcher_) {
         switcher_->reloadServers();
         switcher_->requestChatReconnect();
     }
     updateStreamingFieldStates();
+    statusTimer_->start(1000);
 }
 
 void SettingsDialog::onSave()
 {
+    statusTimer_->stop();
     onApply();
     accept();
 }
