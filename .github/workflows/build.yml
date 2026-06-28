@@ -13,30 +13,44 @@ env:
 
 jobs:
   # ==================== Detect VS Version ====================
-  detect-vs:
-    name: Detect Visual Studio Version
+  detect-vs-x64:
+    name: Detect Visual Studio Version (x64)
     runs-on: windows-latest
     outputs:
       vs-generator: ${{ steps.detect.outputs.vs-generator }}
-      vs-version: ${{ steps.detect.outputs.vs-version }}
     steps:
       - name: Detect VS Generator
         id: detect
         shell: pwsh
         run: |
-          # Check for VS 2026 first, then VS 2022
-          $vs2026Path = "C:\Program Files\Microsoft Visual Studio\18\Enterprise\Common7\IDE\devenv.exe"
-          $vs2022Path = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\devenv.exe"
+          # Check for VS 2026 first, then VS 2022, then try vswhere
+          $vsPaths = @(
+            "C:\Program Files\Microsoft Visual Studio\18\Enterprise\Common7\IDE\devenv.exe",
+            "C:\Program Files\Microsoft Visual Studio\18\Professional\Common7\IDE\devenv.exe",
+            "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\devenv.exe",
+            "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\devenv.exe",
+            "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\devenv.exe",
+            "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe"
+          )
           
-          if (Test-Path $vs2026Path) {
-            Write-Host "Found Visual Studio 18 (2026)"
-            "vs-generator=Visual Studio 18 2026" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            "vs-version=18" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          } elseif (Test-Path $vs2022Path) {
-            Write-Host "Found Visual Studio 17 2022"
-            "vs-generator=Visual Studio 17 2022" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            "vs-version=17" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          } else {
+          $found = $false
+          foreach ($path in $vsPaths) {
+            if (Test-Path $path) {
+              if ($path -match "\\18\\") {
+                Write-Host "Found Visual Studio 18 (2026)"
+                "vs-generator=Visual Studio 18 2026" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+                $found = $true
+                break
+              } elseif ($path -match "\\2022\\") {
+                Write-Host "Found Visual Studio 17 2022"
+                "vs-generator=Visual Studio 17 2022" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+                $found = $true
+                break
+              }
+            }
+          }
+          
+          if (-not $found) {
             Write-Host "Trying vswhere to find VS"
             $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
             if ($vsPath) {
@@ -45,25 +59,99 @@ jobs:
               Write-Host "Found VS version: $vsVersion (major: $majorVersion)"
               if ($majorVersion -ge 18) {
                 "vs-generator=Visual Studio 18 2026" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-                "vs-version=18" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
               } else {
                 "vs-generator=Visual Studio 17 2022" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-                "vs-version=17" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
               }
             } else {
               Write-Error "No Visual Studio found!"
               exit 1
             }
           }
+
+  detect-vs-arm64:
+    name: Detect Visual Studio Version (ARM64)
+    runs-on: windows-11-arm
+    outputs:
+      vs-generator: ${{ steps.detect.outputs.vs-generator }}
+    steps:
+      - name: Detect VS Generator on ARM64
+        id: detect
+        shell: pwsh
+        run: |
+          # ARM64 runners might have VS installed in different locations or ARM-native VS
+          $vsPaths = @(
+            "C:\Program Files\Microsoft Visual Studio\18\Enterprise\Common7\IDE\devenv.exe",
+            "C:\Program Files\Microsoft Visual Studio\18\Professional\Common7\IDE\devenv.exe",
+            "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\devenv.exe",
+            "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\devenv.exe",
+            "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\devenv.exe",
+            "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe",
+            "C:\Program Files (Arm)\Microsoft Visual Studio\18\Enterprise\Common7\IDE\devenv.exe",
+            "C:\Program Files (Arm)\Microsoft Visual Studio\18\Professional\Common7\IDE\devenv.exe",
+            "C:\Program Files (Arm)\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\devenv.exe"
+          )
           
-          Write-Host "Using generator: $env:vs-generator"
-          Write-Host "VS Version: $env:vs-version"
+          $found = $false
+          foreach ($path in $vsPaths) {
+            if (Test-Path $path) {
+              if ($path -match "\\18\\") {
+                Write-Host "Found Visual Studio 18 (2026) on ARM64"
+                "vs-generator=Visual Studio 18 2026" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+                $found = $true
+                break
+              } elseif ($path -match "\\2022\\") {
+                Write-Host "Found Visual Studio 17 2022 on ARM64"
+                "vs-generator=Visual Studio 17 2022" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+                $found = $true
+                break
+              }
+            }
+          }
+          
+          if (-not $found) {
+            Write-Host "Trying vswhere to find VS on ARM64"
+            # Try x86 vswhere first
+            $vswherePath = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+            if (-not (Test-Path $vswherePath)) {
+              # Try native ARM path
+              $vswherePath = "${env:ProgramFiles}\Microsoft Visual Studio\Installer\vswhere.exe"
+            }
+            
+            if (Test-Path $vswherePath) {
+              $vsPath = & $vswherePath -latest -property installationPath
+              if ($vsPath) {
+                $vsVersion = & $vswherePath -latest -property installationVersion
+                $majorVersion = [int]$vsVersion.Split('.')[0]
+                Write-Host "Found VS version: $vsVersion (major: $majorVersion)"
+                if ($majorVersion -ge 18) {
+                  "vs-generator=Visual Studio 18 2026" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+                } else {
+                  "vs-generator=Visual Studio 17 2022" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+                }
+                $found = $true
+              }
+            }
+          }
+          
+          if (-not $found) {
+            # Last resort: try to find any cmake-compatible generator
+            Write-Host "No Visual Studio found, checking for other build tools..."
+            $clPath = Get-Command cl.exe -ErrorAction SilentlyContinue
+            if ($clPath) {
+              Write-Host "Found MSVC compiler at: $($clPath.Source)"
+              # Default to VS 2022 generator as it's more widely supported
+              "vs-generator=Visual Studio 17 2022" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            } else {
+              Write-Error "No Visual Studio or MSVC compiler found on ARM64 runner!"
+              exit 1
+            }
+          }
 
   # ================= Windows x64 build =================
   build-windows-x64:
     name: Build for Windows x64
     runs-on: windows-latest
-    needs: detect-vs
+    needs: detect-vs-x64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -125,23 +213,17 @@ jobs:
           Invoke-WebRequest -Uri "https://curl.se/windows/latest.cgi?p=win64-mingw.zip" -OutFile curl.zip
           Expand-Archive curl.zip -DestinationPath curl-temp
           
-          # Find the extracted folder
           $extractedFolder = Get-ChildItem -Path curl-temp -Directory | Select-Object -First 1
           
-          # Create the curl directory structure
           New-Item -ItemType Directory -Force -Path curl/bin
           New-Item -ItemType Directory -Force -Path curl/include
           New-Item -ItemType Directory -Force -Path curl/lib
           
-          # Copy files to the expected structure
           Copy-Item "$($extractedFolder.FullName)/bin/*" curl/bin/ -Recurse -ErrorAction SilentlyContinue
           Copy-Item "$($extractedFolder.FullName)/include/*" curl/include/ -Recurse -ErrorAction SilentlyContinue
           Copy-Item "$($extractedFolder.FullName)/lib/*" curl/lib/ -Recurse -ErrorAction SilentlyContinue
-          
-          # Also copy files from root if they exist
           Copy-Item "$($extractedFolder.FullName)/*.dll" curl/bin/ -ErrorAction SilentlyContinue
           
-          # Cleanup
           Remove-Item curl-temp -Recurse -Force
           
       - name: Cache OBS build
@@ -155,7 +237,8 @@ jobs:
         if: steps.cache-obs-build.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          $generator = "${{ needs.detect-vs.outputs.vs-generator }}"
+          $generator = "${{ needs.detect-vs-x64.outputs.vs-generator }}"
+          Write-Host "Using generator: $generator"
           cd obs-studio
           cmake -B build_x64 -S . -G "$generator" -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
@@ -171,24 +254,21 @@ jobs:
       - name: Configure Plugin (x64)
         shell: pwsh
         run: |
-          $generator = "${{ needs.detect-vs.outputs.vs-generator }}"
+          $generator = "${{ needs.detect-vs-x64.outputs.vs-generator }}"
           $obsDir = "${{ github.workspace }}/obs-studio"
           $curlDir = "${{ github.workspace }}/curl"
           $obsBuildDir = "$obsDir/build_x64"
           
-          # Find curl library
           $curlLib = Get-ChildItem -Path $curlDir -Filter "*.dll.a" -Recurse | Select-Object -First 1
           if (-not $curlLib) { 
             $curlLib = Get-ChildItem -Path $curlDir -Filter "*.lib" -Recurse | Select-Object -First 1 
           }
           if (-not $curlLib) {
-            Write-Host "CURL library not found, using default path"
             $curlLibPath = "$curlDir/lib/libcurl.dll.a"
           } else {
             $curlLibPath = $curlLib.FullName
           }
           
-          # Find curl include
           $curlInclude = Get-ChildItem -Path $curlDir -Directory -Filter "include" -Recurse | Select-Object -First 1
           if (-not $curlInclude) {
             $curlIncludePath = "$curlDir/include"
@@ -198,6 +278,7 @@ jobs:
           
           Write-Host "CURL Library: $curlLibPath"
           Write-Host "CURL Include: $curlIncludePath"
+          Write-Host "Using generator: $generator"
           
           cmake -B build -S . -G "$generator" -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
@@ -216,10 +297,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path "release/obs-plugins/64bit", "release/data/obs-plugins/${{ env.PLUGIN_NAME }}"
           
-          # Copy plugin DLL
           Copy-Item "build/Release/${{ env.PLUGIN_NAME }}.dll" "release/obs-plugins/64bit/"
           
-          # Find and copy curl DLL
           $curlDll = Get-ChildItem -Path curl -Filter "*.dll" -Recurse | Where-Object { 
             $_.Name -match "libcurl" -and $_.Directory.Name -match "bin" 
           } | Select-Object -First 1
@@ -235,12 +314,10 @@ jobs:
             Write-Host "Warning: curl DLL not found"
           }
           
-          # Copy data files
           if (Test-Path "data") { 
             Copy-Item -Recurse "data/*" "release/data/obs-plugins/${{ env.PLUGIN_NAME }}/" 
           }
           
-          # List packaged files for verification
           Write-Host "Packaged files:"
           Get-ChildItem release -Recurse | ForEach-Object { Write-Host $_.FullName }
           
@@ -267,7 +344,7 @@ jobs:
   build-windows-arm64:
     name: Build for Windows ARM64 (Native)
     runs-on: windows-11-arm
-    needs: detect-vs
+    needs: detect-vs-arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -301,7 +378,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: simde
-          key: simde
+          key: simde-v2
 
       - name: Download SIMDe
         if: steps.cache-simde.outputs.cache-hit != 'true'
@@ -314,7 +391,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: obs-studio
-          key: obs-studio-fork-arm64-v2
+          key: obs-studio-fork-arm64-v3
 
       - name: Clone OBS Studio with ARM64 support
         if: steps.cache-obs.outputs.cache-hit != 'true'
@@ -345,7 +422,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: curl
-          key: curl-latest-arm64-v2
+          key: curl-latest-arm64-v3
 
       - name: Download CURL for ARM64
         if: steps.cache-curl.outputs.cache-hit != 'true'
@@ -363,7 +440,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: obs-studio/build_arm64
-          key: obs-build-fork-arm64-v2
+          key: obs-build-fork-arm64-v3
 
       - name: Build OBS Libraries for ARM64 (using fork)
         if: steps.cache-obs-build.outputs.cache-hit != 'true'
@@ -386,7 +463,9 @@ jobs:
       - name: Configure Plugin for ARM64
         shell: pwsh
         run: |
-          $generator = "${{ needs.detect-vs.outputs.vs-generator }}"
+          $generator = "${{ needs.detect-vs-arm64.outputs.vs-generator }}"
+          Write-Host "Using generator: $generator for ARM64"
+          
           $obsDir = "${{ github.workspace }}/obs-studio"
           $curlDir = "${{ github.workspace }}/curl"
           $simdeDir = "${{ github.workspace }}/simde"
@@ -445,7 +524,15 @@ jobs:
           
           $curlLib = Get-ChildItem -Path $curlDir -Filter "*.dll.a" -Recurse | Select-Object -First 1
           if (-not $curlLib) { $curlLib = Get-ChildItem -Path $curlDir -Filter "*.lib" -Recurse | Select-Object -First 1 }
-          $curlLibPath = $curlLib.FullName -replace '\\', '/'
+          if (-not $curlLib) {
+            Write-Warning "CURL library not found, using default path"
+            $curlLibPath = "$curlDirCMake/lib/libcurl.dll.a"
+          } else {
+            $curlLibPath = $curlLib.FullName -replace '\\', '/'
+          }
+          
+          Write-Host "CURL Library: $curlLibPath"
+          Write-Host "Using generator: $generator"
           
           cmake -B build -S . -G "$generator" -A ARM64 `
             -DCMAKE_BUILD_TYPE=RelWithDebInfo `
@@ -603,15 +690,12 @@ jobs:
       - name: Create Release Archives
         run: |
           mkdir -p release_archives
-          # Windows x64
           if [ -d "artifacts/${{ env.PLUGIN_NAME }}-windows-x64" ]; then
             cd artifacts/${{ env.PLUGIN_NAME }}-windows-x64 && zip -r ../../release_archives/${{ env.PLUGIN_NAME }}-${{ github.ref_name }}-windows-x64.zip . && cd ../..
           fi
-          # Windows ARM64
           if [ -d "artifacts/${{ env.PLUGIN_NAME }}-windows-arm64" ]; then
             cd artifacts/${{ env.PLUGIN_NAME }}-windows-arm64 && zip -r ../../release_archives/${{ env.PLUGIN_NAME }}-${{ github.ref_name }}-windows-arm64.zip . && cd ../..
           fi
-          # Linux x86_64 (tarball already exists, just copy it)
           if [ -d "artifacts/${{ env.PLUGIN_NAME }}-linux-x86_64" ]; then
             cp artifacts/${{ env.PLUGIN_NAME }}-linux-x86_64/*.tar.gz release_archives/
           fi
