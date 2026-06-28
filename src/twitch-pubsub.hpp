@@ -20,6 +20,7 @@ public:
 	~TwitchPubSubClient();
 
 	void setRaidCallback(RaidCallback cb);
+	void setAuthToken(const std::string &token);  // NEW: Set OAuth token
 	void subscribeRaid(const std::string &broadcasterUserId);
 	void start();
 	void stop();
@@ -30,6 +31,7 @@ private:
 	void flushListen();
 
 	RaidCallback raidCb_;
+	std::string authToken_;  // NEW: Store the OAuth token
 	std::mutex mutex_;
 	std::vector<std::string> topics_;
 	bool resendListen_ = false;
