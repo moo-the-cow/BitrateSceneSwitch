@@ -4,6 +4,7 @@
 #include <functional>
 #include <atomic>
 #include <mutex>
+#include <condition_variable>   // <-- ADDED
 #include <curl/curl.h>
 
 namespace BitrateSwitch {
