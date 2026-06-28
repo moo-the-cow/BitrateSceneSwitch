@@ -28,8 +28,11 @@ public:
 private:
 	void workerMain();
 	void flushListen();
+	void loadTokenFromConfig();   // NEW
 
 	RaidCallback raidCb_;
+	std::string authToken_;
+	bool tokenLoaded_ = false;    // NEW: ensure we load once
 	std::mutex mutex_;
 	std::vector<std::string> topics_;
 	bool resendListen_ = false;
