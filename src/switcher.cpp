@@ -6,7 +6,7 @@
 #include <cstring>
 #include <thread>
 #include <vector>
-#include <curl/curl.h>          // for fetching broadcaster-id
+#include <curl/curl.h>
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -237,7 +237,7 @@ void Switcher::connectChat()
         config_->unlockRead();
     }
 
-    // --- ADDED: log token status ---
+    // Log token status
     if (chatCfg.oauthToken.empty()) {
         blog(LOG_WARNING, "[BitrateSceneSwitch] Chat OAuth token is EMPTY – chat and PubSub will fail!");
     } else {
@@ -281,7 +281,7 @@ void Switcher::connectChat()
             handleRaidStop(login, disp);
         });
 
-        // --- ADDED: start PubSub immediately via API lookup ---
+        // Start PubSub immediately via API lookup (independent of chat)
         fetchBroadcasterIdAndStartPubsub(chatCfg);
     }
 
@@ -535,6 +535,660 @@ void Switcher::handleCustomCommands(const ChatMessage& msg)
     }
 }
 
+void Switcher::switcherThread()
+{
+    blog(LOG_INFO, "[BitrateSceneSwitch] Switcher thread running");
+
+    while (running_) {
+        os_sleep_ms(1000);
+
+        if (!running_)
+            break;
+
+        if (chatReconnectRequested_.exchange(false)) {
+            chatReconnectDelay_ = 0;
+            bool wantChat;
+            {
+                config_->lockRead();
+                wantChat = config_->chat.enabled;
+                config_->unlockRead();
+            }
+            if (wantChat)
+                connectChat();
+            else
+                disconnectChat();
+            chatNextReconnect_ = std::chrono::steady_clock::now() +
+                                 std::chrono::seconds(10);
+            continue;
+        }
+
+        bool chatConnected = false;
+        {
+            std::lock_guard<std::mutex> clock(chatMutex_);
+            if (kickChat_)
+                chatConnected = kickChat_->isConnected();
+            else if (twitchChat_)
+                chatConnected = twitchChat_->isConnected();
+
+            if (twitchPubSub_ && twitchPubSub_->isConnected()) {
+                pubsubWasConnected_ = true;
+                pubsubRetryDelay_ = 0;
+            } else if (twitchPubSub_ && !twitchPubSub_->isConnected() &&
+                       pubsubWasConnected_) {
+                auto now = std::chrono::steady_clock::now();
+                if (now >= pubsubNextRetry_) {
+                    blog(LOG_INFO,
+                         "[BitrateSceneSwitch] PubSub dropped, reconnecting (next retry %ds)...",
+                         pubsubRetryDelay_);
+                    twitchPubSub_->stop();
+                    twitchPubSub_->start();
+                    pubsubWasConnected_ = false;
+                    if (pubsubRetryDelay_ == 0)
+                        pubsubRetryDelay_ = 5;
+                    else if (pubsubRetryDelay_ < 60)
+                        pubsubRetryDelay_ = (std::min)(pubsubRetryDelay_ * 2, 60);
+                    pubsubNextRetry_ = now + std::chrono::seconds(pubsubRetryDelay_);
+                }
+            }
+        }
+
+        if (config_->chat.enabled && !chatConnected) {
+            bool hasCreds = false;
+            {
+                config_->lockRead();
+                if (config_->chat.platform == ChatPlatform::Kick) {
+                    hasCreds = !config_->chat.channel.empty() &&
+                               config_->chat.kickChannelId != 0 &&
+                               config_->chat.kickChatroomId != 0;
+                } else {
+                    hasCreds = !config_->chat.channel.empty() &&
+                               !config_->chat.oauthToken.empty();
+                }
+                config_->unlockRead();
+            }
+            if (hasCreds) {
+                auto now = std::chrono::steady_clock::now();
+                if (now >= chatNextReconnect_) {
+                    blog(LOG_INFO, "[BitrateSceneSwitch] Chat dropped, retrying in %ds...",
+                         chatReconnectDelay_);
+                    connectChat();
+                    if (chatReconnectDelay_ == 0)
+                        chatReconnectDelay_ = 5;
+                    else if (chatReconnectDelay_ < 60)
+                        chatReconnectDelay_ = (std::min)(chatReconnectDelay_ * 2, 60);
+                    chatNextReconnect_ = now + std::chrono::seconds(chatReconnectDelay_);
+                }
+            }
+        } else if (config_->chat.enabled && chatConnected) {
+            chatReconnectDelay_ = 0;
+        }
+
+        config_->lockRead();
+
+        if (!config_->enabled) {
+            config_->unlockRead();
+            continue;
+        }
+
+        bool polledOffline;
+        {
+            StreamServer* dummy = nullptr;
+            polledOffline = (getOnlineServerStatusLocked(&dummy) == SwitchType::Offline);
+        }
+
+        if (config_->onlyWhenStreaming && !isStreaming_) {
+            config_->unlockRead();
+            continue;
+        }
+
+        handleRistStaleFrameFix(polledOffline);
+
+        if (manualOverride_) {
+            config_->unlockRead();
+            continue;
+        }
+
+        std::string current = getCurrentScene();
+        if (!isSceneSwitchable(current)) {
+            config_->unlockRead();
+            continue;
+        }
+
+        doSwitchCheck();
+        config_->unlockRead();
+    }
+}
+
+void Switcher::updateStatusCache()
+{
+    // Caller must hold mutex_
+    BitrateInfo info = lastBitrateInfo_;
+    
+    if (info.isOnline) {
+        cachedStatusString_ = "Status: " + formatTemplate(config_->messages.statusResponse);
+        cachedBitrateString_ = "Bitrate: " + std::to_string(info.bitrateKbps) + " kbps";
+    } else {
+        cachedStatusString_ = "Status: " + formatTemplate(config_->messages.statusOffline);
+        cachedBitrateString_ = "Bitrate: Offline";
+    }
+}
+
+void Switcher::doSwitchCheck()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    StreamServer* activeServer = nullptr;
+    SwitchType currentSwitchType = getOnlineServerStatusLocked(&activeServer);
+
+    if (wasOnStartingScene_ && config_->options.switchFromStartingToLive) {
+        if (currentSwitchType == SwitchType::Normal || currentSwitchType == SwitchType::Low) {
+            wasOnStartingScene_ = false;
+        }
+    }
+
+    bool forceSwitch = config_->instantRecover &&
+                       prevSwitchType_ == SwitchType::Offline &&
+                       currentSwitchType != SwitchType::Offline;
+
+    if (currentSwitchType == SwitchType::Previous && activeServer) {
+        if (!lastUsedServerName_.empty() && lastUsedServerName_ != activeServer->getName()) {
+            currentSwitchType = SwitchType::Normal;
+            forceSwitch = true;
+        }
+    }
+
+    if (prevSwitchType_ == currentSwitchType) {
+        sameTypeCount_++;
+    } else {
+        prevSwitchType_ = currentSwitchType;
+        sameTypeCount_ = 0;
+        sameTypeStart_ = std::chrono::steady_clock::now();
+        
+        if (currentSwitchType == SwitchType::Offline) {
+            offlineStart_ = std::chrono::steady_clock::now();
+        }
+    }
+
+    if (sameTypeCount_ < config_->retryAttempts && !forceSwitch) {
+        updateStatusCache();
+        return;
+    }
+
+    if (!config_->onlyWhenStreaming) {
+        auto streamElapsed = std::chrono::steady_clock::now() - streamStartTime_;
+        auto gracePeriod = std::chrono::seconds(config_->retryAttempts + 5);
+        if (streamElapsed <= gracePeriod) {
+            sameTypeStart_ = std::chrono::steady_clock::now();
+        }
+    }
+
+    sameTypeCount_ = 0;
+
+    handleOfflineTimeout();
+
+    StreamServer* serverForScenes = activeServer;
+    if (currentSwitchType == SwitchType::Offline && !lastUsedServerName_.empty()) {
+        for (auto& server : servers_) {
+            if (server->getName() == lastUsedServerName_) {
+                serverForScenes = server.get();
+                break;
+            }
+        }
+    }
+
+    std::string targetScene;
+    if (currentSwitchType == SwitchType::Previous) {
+        targetScene = prevScene_;
+    } else {
+        targetScene = getSceneForType(currentSwitchType, serverForScenes);
+    }
+
+    if (currentSwitchType == SwitchType::Normal || 
+        currentSwitchType == SwitchType::Low) {
+        prevScene_ = targetScene;
+    }
+    
+    if (currentSwitchType != SwitchType::Offline && activeServer) {
+        lastUsedServerName_ = activeServer->getName();
+    }
+
+    std::string currentScene = getCurrentScene();
+    if (!config_->optionalScenes.starting.empty() &&
+        currentScene == config_->optionalScenes.starting &&
+        config_->options.switchFromStartingToLive &&
+        currentSwitchType == SwitchType::Offline) {
+        updateStatusCache();
+        return;
+    }
+
+    if (getCurrentScene() != targetScene) {
+        switchToScene(targetScene);
+        announceSceneChange(currentSwitchType);
+    }
+    
+    updateStatusCache();
+}
+
+void Switcher::handleRistStaleFrameFix(bool offline)
+{
+    if (config_->options.ristStaleFrameFixSec == 0)
+        return;
+
+    if (offline) {
+        if (!hasBeenOnline_ || ristFixFired_)
+            return;
+
+        if (!ristFixPending_) {
+            ristFixPending_ = true;
+            ristFixTriggerTime_ = std::chrono::steady_clock::now();
+        } else {
+            auto elapsed = std::chrono::steady_clock::now() - ristFixTriggerTime_;
+            auto delaySec = std::chrono::seconds(config_->options.ristStaleFrameFixSec);
+            if (elapsed >= delaySec) {
+                blog(LOG_INFO, "[BitrateSceneSwitch] RIST stale frame fix: refreshing media sources after %u sec offline",
+                     config_->options.ristStaleFrameFixSec);
+                obs_queue_task(
+                    OBS_TASK_UI,
+                    [](void *) {
+                        obs_enum_sources(
+                            [](void *, obs_source_t *source) -> bool {
+                                const char *sourceId = obs_source_get_id(source);
+                                if (!sourceId)
+                                    return true;
+                                if (strcmp(sourceId, "ffmpeg_source") != 0 &&
+                                    strcmp(sourceId, "vlc_source") != 0)
+                                    return true;
+
+                                obs_data_t *settings = obs_source_get_settings(source);
+                                if (!settings)
+                                    return true;
+                                const char *input = obs_data_get_string(settings, "input");
+                                bool isRist = input && *input &&
+                                              (strncmp(input, "rist", 4) == 0 ||
+                                               strncmp(input, "RIST", 4) == 0);
+                                obs_data_release(settings);
+
+                                if (isRist) {
+                                    obs_source_media_restart(source);
+                                    blog(LOG_INFO,
+                                         "[BitrateSceneSwitch] RIST fix: restarted %s",
+                                         obs_source_get_name(source));
+                                }
+                                return true;
+                            },
+                            nullptr);
+                    },
+                    nullptr, false);
+                ristFixPending_ = false;
+                ristFixFired_ = true;
+            }
+        }
+    } else {
+        hasBeenOnline_ = true;
+        ristFixPending_ = false;
+        ristFixFired_ = false;
+    }
+}
+
+void Switcher::handleOfflineTimeout()
+{
+    if (prevSwitchType_ != SwitchType::Offline)
+        return;
+    
+    if (config_->options.offlineTimeoutMinutes == 0)
+        return;
+    
+    if (!isStreaming_)
+        return;
+
+    auto elapsed = std::chrono::steady_clock::now() - offlineStart_;
+    auto minutes = std::chrono::duration_cast<std::chrono::minutes>(elapsed).count();
+    
+    if (minutes >= static_cast<long>(config_->options.offlineTimeoutMinutes)) {
+        blog(LOG_INFO, "[BitrateSceneSwitch] Offline timeout reached (%d min), stopping stream",
+             config_->options.offlineTimeoutMinutes);
+        obs_queue_task(OBS_TASK_UI, [](void*) {
+            obs_frontend_streaming_stop();
+        }, nullptr, false);
+    }
+}
+
+void Switcher::handleStartingScene()
+{
+    if (wasOnStartingScene_ && config_->options.switchFromStartingToLive) {
+        wasOnStartingScene_ = false;
+        switchToScene(config_->scenes.normal);
+    }
+}
+
+SwitchType Switcher::getOnlineServerStatus(StreamServer** activeServer)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return getOnlineServerStatusLocked(activeServer);
+}
+
+SwitchType Switcher::getOnlineServerStatusLocked(StreamServer** activeServer)
+{
+    for (auto &server : servers_) {
+        SwitchType status = server->checkSwitch(config_->triggers);
+
+        if (status != SwitchType::Offline) {
+            lastBitrateInfo_ = server->getBitrate();
+            lastBitrateInfo_.serverName = server->getName();
+            if (activeServer) *activeServer = server.get();
+            return status;
+        }
+    }
+
+    lastBitrateInfo_ = BitrateInfo();
+    if (activeServer) *activeServer = nullptr;
+    return SwitchType::Offline;
+}
+
+void Switcher::switchToScene(const std::string &sceneName)
+{
+    if (!running_)
+        return;
+
+    std::string current = getCurrentScene();
+    
+    if (current == sceneName)
+        return;
+
+    obs_source_t *sceneSource = obs_get_source_by_name(sceneName.c_str());
+    if (sceneSource) {
+        obs_frontend_set_current_scene(sceneSource);
+        obs_source_release(sceneSource);
+        blog(LOG_INFO, "[BitrateSceneSwitch] Switched to scene: %s", sceneName.c_str());
+    } else {
+        blog(LOG_WARNING, "[BitrateSceneSwitch] Scene not found: %s", sceneName.c_str());
+    }
+}
+
+std::string Switcher::getSceneForType(SwitchType type, StreamServer* server)
+{
+    if (server && server->hasOverrideScenes()) {
+        const OverrideScenes& override = server->getOverrideScenes();
+        switch (type) {
+        case SwitchType::Normal:
+            if (!override.normal.empty()) return override.normal;
+            break;
+        case SwitchType::Low:
+            if (!override.low.empty()) return override.low;
+            break;
+        case SwitchType::Offline:
+            if (!override.offline.empty()) return override.offline;
+            break;
+        default:
+            break;
+        }
+    }
+
+    switch (type) {
+    case SwitchType::Normal:
+        return config_->scenes.normal;
+    case SwitchType::Low:
+        return config_->scenes.low;
+    case SwitchType::Offline:
+        return config_->scenes.offline;
+    default:
+        return config_->scenes.normal;
+    }
+}
+
+bool Switcher::isSceneSwitchable(const std::string &scene)
+{
+    if (scene == config_->scenes.normal ||
+        scene == config_->scenes.low ||
+        scene == config_->scenes.offline) {
+        return true;
+    }
+    
+    if (wasOnStartingScene_ && scene == config_->optionalScenes.starting) {
+        return config_->options.switchFromStartingToLive;
+    }
+    
+    return false;
+}
+
+std::string Switcher::getCurrentScene()
+{
+    obs_source_t *sceneSource = obs_frontend_get_current_scene();
+    std::string name;
+    
+    if (sceneSource) {
+        const char *sceneName = obs_source_get_name(sceneSource);
+        if (sceneName) {
+            name = sceneName;
+        }
+        obs_source_release(sceneSource);
+    }
+    
+    return name;
+}
+
+void Switcher::switchToLive()
+{
+    switchToScene(config_->scenes.normal);
+    blog(LOG_INFO, "[BitrateSceneSwitch] Manual switch to Live scene");
+}
+
+void Switcher::switchToPrivacy()
+{
+    if (!config_->optionalScenes.privacy.empty()) {
+        switchToScene(config_->optionalScenes.privacy);
+        blog(LOG_INFO, "[BitrateSceneSwitch] Manual switch to Privacy scene");
+    }
+}
+
+void Switcher::switchToStarting()
+{
+    if (!config_->optionalScenes.starting.empty()) {
+        switchToScene(config_->optionalScenes.starting);
+        wasOnStartingScene_ = true;
+        blog(LOG_INFO, "[BitrateSceneSwitch] Manual switch to Starting scene");
+    }
+}
+
+void Switcher::switchToEnding()
+{
+    if (!config_->optionalScenes.ending.empty()) {
+        switchToScene(config_->optionalScenes.ending);
+        blog(LOG_INFO, "[BitrateSceneSwitch] Manual switch to Ending scene");
+    }
+}
+
+void Switcher::refreshScene()
+{
+    if (!config_->optionalScenes.refresh.empty()) {
+        std::string previousScene = getCurrentScene();
+
+        if (previousScene == config_->optionalScenes.refresh) {
+            blog(LOG_INFO, "[BitrateSceneSwitch] Refresh: already on refresh scene, skipping");
+            return;
+        }
+
+        if (refreshing_) {
+            blog(LOG_INFO, "[BitrateSceneSwitch] Refresh: already in progress, skipping");
+            return;
+        }
+
+        switchToScene(config_->optionalScenes.refresh);
+        blog(LOG_INFO, "[BitrateSceneSwitch] Refresh: switching to refresh scene");
+
+        if (refreshThread_.joinable())
+            refreshThread_.join();
+
+        refreshing_ = true;
+        refreshThread_ = std::thread([this, previousScene]() {
+            for (int i = 0; i < 50 && running_; ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (running_) {
+                switchToScene(previousScene);
+                blog(LOG_INFO, "[BitrateSceneSwitch] Refresh: returned to scene: %s",
+                     previousScene.c_str());
+            }
+            refreshing_ = false;
+        });
+    } else {
+        fixMediaSources();
+    }
+}
+
+void Switcher::fixMediaSources()
+{
+    obs_enum_sources([](void*, obs_source_t *source) -> bool {
+        const char *sourceId = obs_source_get_id(source);
+        if (!sourceId) return true;
+
+        if (strcmp(sourceId, "ffmpeg_source") != 0 &&
+            strcmp(sourceId, "vlc_source") != 0)
+            return true;
+
+        obs_data_t *settings = obs_source_get_settings(source);
+        if (!settings) return true;
+
+        const char *input = obs_data_get_string(settings, "input");
+        if (!input || input[0] == '\0') {
+            obs_data_release(settings);
+            return true;
+        }
+
+        std::string inputStr = input;
+        obs_data_release(settings);
+        std::transform(inputStr.begin(), inputStr.end(), inputStr.begin(), ::tolower);
+
+        bool isStreamSource =
+            inputStr.rfind("rtmp", 0) == 0 ||
+            inputStr.rfind("srt", 0) == 0 ||
+            inputStr.rfind("udp", 0) == 0 ||
+            inputStr.rfind("rist", 0) == 0 ||
+            inputStr.rfind("rtsp", 0) == 0;
+
+        if (isStreamSource) {
+            obs_source_media_restart(source);
+            blog(LOG_INFO, "[BitrateSceneSwitch] Fix: refreshed media source: %s",
+                 obs_source_get_name(source));
+        }
+        return true;
+    }, nullptr);
+
+    blog(LOG_INFO, "[BitrateSceneSwitch] Fix: refreshed media sources");
+}
+
+void Switcher::switchToLow()
+{
+    switchToScene(config_->scenes.low);
+    blog(LOG_INFO, "[BitrateSceneSwitch] Manual switch to Low scene");
+}
+
+void Switcher::switchToBrb()
+{
+    switchToScene(config_->scenes.offline);
+    blog(LOG_INFO, "[BitrateSceneSwitch] Manual switch to BRB/Offline scene");
+}
+
+void Switcher::triggerSwitch()
+{
+    doSwitchCheck();
+    blog(LOG_INFO, "[BitrateSceneSwitch] Manual trigger of switch check");
+}
+
+static double damerauLevenshteinSimilarity(const std::string &a,
+					    const std::string &b)
+{
+	size_t la = a.size(), lb = b.size();
+	if (la == 0 && lb == 0)
+		return 1.0;
+	if (la == 0 || lb == 0)
+		return 0.0;
+
+	std::vector<std::vector<size_t>> d(la + 1,
+					   std::vector<size_t>(lb + 1, 0));
+	for (size_t i = 0; i <= la; i++)
+		d[i][0] = i;
+	for (size_t j = 0; j <= lb; j++)
+		d[0][j] = j;
+
+	for (size_t i = 1; i <= la; i++) {
+		for (size_t j = 1; j <= lb; j++) {
+			size_t cost = (a[i - 1] == b[j - 1]) ? 0 : 1;
+			d[i][j] = (std::min)({d[i - 1][j] + 1,
+					      d[i][j - 1] + 1,
+					      d[i - 1][j - 1] + cost});
+			if (i > 1 && j > 1 && a[i - 1] == b[j - 2] &&
+			    a[i - 2] == b[j - 1])
+				d[i][j] = (std::min)(d[i][j],
+						     d[i - 2][j - 2] + 1);
+		}
+	}
+
+	double maxLen = static_cast<double>((std::max)(la, lb));
+	return 1.0 - static_cast<double>(d[la][lb]) / maxLen;
+}
+
+bool Switcher::switchToSceneByName(const std::string &name)
+{
+	obs_frontend_source_list scenes = {};
+	obs_frontend_get_scenes(&scenes);
+
+	std::string input = name;
+	std::transform(input.begin(), input.end(), input.begin(), ::tolower);
+
+	std::string bestScene;
+	double bestScore = -1.0;
+
+	for (size_t i = 0; i < scenes.sources.num; i++) {
+		obs_source_t *source = scenes.sources.array[i];
+		const char *sceneName = obs_source_get_name(source);
+		if (!sceneName)
+			continue;
+
+		std::string candidate = sceneName;
+		std::string candLower = candidate;
+		std::transform(candLower.begin(), candLower.end(),
+			       candLower.begin(), ::tolower);
+
+		if (candLower == input) {
+			bestScene = candidate;
+			bestScore = 1.0;
+			break;
+		}
+
+		double score;
+		if (candLower.find(input) == 0)
+			score = 0.8 + 0.2 * (double)input.size() /
+						(double)candLower.size();
+		else if (candLower.find(input) != std::string::npos)
+			score = 0.6 + 0.2 * (double)input.size() /
+						(double)candLower.size();
+		else
+			score = (std::min)(
+				damerauLevenshteinSimilarity(input, candLower),
+				0.59);
+
+		if (score > bestScore) {
+			bestScore = score;
+			bestScene = candidate;
+		}
+	}
+
+	obs_frontend_source_list_free(&scenes);
+
+	if (bestScore >= 0.3 && !bestScene.empty()) {
+		switchToScene(bestScene);
+		blog(LOG_INFO,
+		     "[BitrateSceneSwitch] Matched \"%s\" -> \"%s\" (%.2f)",
+		     name.c_str(), bestScene.c_str(), bestScore);
+		return true;
+	}
+
+	blog(LOG_WARNING,
+	     "[BitrateSceneSwitch] No scene matched \"%s\" (best: %.2f)",
+	     name.c_str(), bestScore);
+	return false;
+}
+
 BitrateInfo Switcher::getLastBitrateInfo() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -578,8 +1232,5 @@ std::string Switcher::getCachedBitrateLine()
     std::lock_guard<std::mutex> lock(statusCacheMutex_);
     return cachedBitrateString_;
 }
-
-// ---- The rest of the Switcher methods (switcherThread, doSwitchCheck, etc.) remain exactly as before ----
-// [They are not shown here for brevity, but they are unchanged from the original you provided.]
 
 } // namespace BitrateSwitch
