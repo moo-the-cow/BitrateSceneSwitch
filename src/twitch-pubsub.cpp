@@ -8,6 +8,7 @@
 #include <QJsonObject>
 
 #include <chrono>
+#include <fstream>
 #include <utility>
 
 #ifdef _WIN32
@@ -17,6 +18,24 @@
 namespace BitrateSwitch {
 
 static const char *kPubSubUrl = "wss://pubsub-edge.twitch.tv";
+
+// Helper to get the plugin's config file path (cross‑platform)
+static std::string getConfigFilePath()
+{
+	// OBS stores plugin configs relative to the config directory
+	char *configPath = obs_module_config_path(nullptr);
+	std::string path;
+	if (configPath) {
+		path = configPath;
+		bfree(configPath);
+	}
+	// The file is saved as "BitrateSceneSwitch.json" by the plugin's Config::save()
+	if (path.empty())
+		path = "BitrateSceneSwitch.json";
+	else
+		path += "/BitrateSceneSwitch.json";
+	return path;
+}
 
 struct RaidPack {
 	TwitchPubSubClient::RaidCallback cb;
@@ -51,6 +70,30 @@ void TwitchPubSubClient::setRaidCallback(RaidCallback cb)
 {
 	std::lock_guard<std::mutex> lock(mutex_);
 	raidCb_ = std::move(cb);
+}
+
+void TwitchPubSubClient::loadTokenFromConfig()
+{
+	std::string path = getConfigFilePath();
+	blog(LOG_INFO, "[BitrateSceneSwitch] PubSub: Loading token from %s", path.c_str());
+
+	obs_data_t *data = obs_data_create_from_json_file(path.c_str());
+	if (!data) {
+		blog(LOG_WARNING, "[BitrateSceneSwitch] PubSub: Config file not found or invalid JSON");
+		return;
+	}
+
+	const char *token = obs_data_get_string(data, "chat_oauth_token");
+	if (token && *token) {
+		std::lock_guard<std::mutex> lock(mutex_);
+		authToken_ = token;
+		blog(LOG_INFO, "[BitrateSceneSwitch] PubSub: Token loaded from config (length=%zu)", authToken_.size());
+	} else {
+		blog(LOG_WARNING, "[BitrateSceneSwitch] PubSub: No 'chat_oauth_token' in config file");
+	}
+
+	obs_data_release(data);
+	tokenLoaded_ = true;
 }
 
 void TwitchPubSubClient::subscribeRaid(const std::string &broadcasterUserId)
@@ -95,15 +138,31 @@ bool TwitchPubSubClient::isConnected() const
 void TwitchPubSubClient::flushListen()
 {
 	std::vector<std::string> copy;
+	std::string token;
 	{
 		std::lock_guard<std::mutex> lock(mutex_);
 		copy = topics_;
+		token = authToken_;
 		resendListen_ = false;
 	}
 	if (copy.empty())
 		return;
 
-	blog(LOG_INFO, "[BitrateSceneSwitch] PubSub: Building LISTEN for %zu topic(s)", copy.size());
+	// Auto-load token if not done yet
+	if (!tokenLoaded_) {
+		loadTokenFromConfig();
+		std::lock_guard<std::mutex> lock(mutex_);
+		token = authToken_;
+	}
+
+	if (token.empty()) {
+		blog(LOG_ERROR, "[BitrateSceneSwitch] PubSub: No auth token available – Twitch will reject LISTEN with ERR_BADAUTH");
+		blog(LOG_ERROR, "[BitrateSceneSwitch] PubSub: Make sure you have set a valid OAuth token in the plugin settings");
+		return;
+	}
+	blog(LOG_INFO, "[BitrateSceneSwitch] PubSub: Using auth token (length=%zu)", token.size());
+
+	blog(LOG_INFO, "[BitrateSceneSwitch] PubSub: Building LISTEN for %zu topic(s):", copy.size());
 	for (const auto &t : copy)
 		blog(LOG_INFO, "[BitrateSceneSwitch] PubSub:   Topic: %s", t.c_str());
 
@@ -113,17 +172,22 @@ void TwitchPubSubClient::flushListen()
 
 	QJsonObject data;
 	data["topics"] = qtopics;
-	data["auth_token"] = QStringLiteral("");
+	data["auth_token"] = QString::fromStdString(token);
 
 	QJsonObject root;
 	root["type"] = QStringLiteral("LISTEN");
 	root["nonce"] = QString::number(++nonce_);
 	root["data"] = data;
 
-	std::string json =
-		QJsonDocument(root).toJson(QJsonDocument::Compact).toStdString();
+	std::string json = QJsonDocument(root).toJson(QJsonDocument::Compact).toStdString();
+	// Redact token in log
+	QJsonObject logRoot = root;
+	QJsonObject logData = data;
+	logData["auth_token"] = QStringLiteral("***");
+	logRoot["data"] = logData;
+	std::string logJson = QJsonDocument(logRoot).toJson(QJsonDocument::Compact).toStdString();
 	blog(LOG_INFO, "[BitrateSceneSwitch] PubSub: Sending LISTEN (nonce=%d): %s",
-	     nonce_, json.c_str());
+	     nonce_, logJson.c_str());
 	ws_.send(json);
 }
 
