@@ -1,47 +1,53 @@
 #pragma once
 
-#ifdef _WIN32
-// pull winsock2 before windows.h so headers that include winsock2.h later
-// (chat-client.hpp via switcher.hpp) don't collide with the legacy winsock
-// types that windows.h would otherwise define
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <windows.h>
-#include <winhttp.h>
-#else
-#include <curl/curl.h>
-#endif
-
-#include <atomic>
 #include <string>
+#include <functional>
+#include <atomic>
+#include <mutex>
+#include <curl/curl.h>
 
 namespace BitrateSwitch {
 
 class WsClient {
 public:
-	enum class RecvResult { Message, Timeout, Error, Closed };
+    enum class RecvResult {
+        Message,
+        Timeout,
+        Error,
+        Disconnected
+    };
 
-	WsClient();
-	~WsClient();
-
-	bool connect(const std::string &url);
-	void disconnect();
-	bool send(const std::string &text);
-	RecvResult recv(std::string &out);
-	bool isConnected() const;
+    WsClient();
+    ~WsClient();
+    
+    WsClient(const WsClient&) = delete;
+    WsClient& operator=(const WsClient&) = delete;
+    
+    bool connect(const std::string &url);
+    void disconnect();
+    bool send(const std::string &data);
+    RecvResult recv(std::string &out, int timeoutSeconds = 10);
+    bool isConnected() const;
 
 private:
-#ifdef _WIN32
-	HINTERNET session_ = nullptr;
-	HINTERNET connect_ = nullptr;
-	HINTERNET websocket_ = nullptr;
-#else
-	CURL *curl_ = nullptr;
-#endif
-	std::atomic<bool> connected_{false};
+    static size_t writeCallback(char *ptr, size_t size, size_t nmemb, void *userdata);
+    static int debugCallback(CURL *handle, curl_infotype type, char *data, size_t size, void *userp);
+    
+    CURL *easy_ = nullptr;
+    std::atomic<bool> connected_{false};
+    std::mutex sendMutex_;
+    std::mutex recvMutex_;
+    
+    struct RecvBuffer {
+        std::string data;
+        std::mutex mutex;
+        std::condition_variable cv;
+        bool hasData = false;
+    };
+    RecvBuffer recvBuffer_;
+    
+    std::string lastError_;
+    std::string url_;
 };
 
 } // namespace BitrateSwitch
