@@ -4,7 +4,7 @@
 #include <functional>
 #include <atomic>
 #include <mutex>
-#include <condition_variable>   // <-- ADDED
+#include <condition_variable>
 #include <curl/curl.h>
 
 namespace BitrateSwitch {
@@ -15,7 +15,7 @@ public:
         Message,
         Timeout,
         Error,
-        Disconnected
+        Closed
     };
 
     WsClient();
