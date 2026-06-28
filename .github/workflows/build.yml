@@ -12,9 +12,58 @@ env:
   PLUGIN_NAME: BitrateSceneSwitch
 
 jobs:
+  # ==================== Detect VS Version ====================
+  detect-vs:
+    name: Detect Visual Studio Version
+    runs-on: windows-latest
+    outputs:
+      vs-generator: ${{ steps.detect.outputs.vs-generator }}
+      vs-version: ${{ steps.detect.outputs.vs-version }}
+    steps:
+      - name: Detect VS Generator
+        id: detect
+        shell: pwsh
+        run: |
+          # Check for VS 2026 first, then VS 2022
+          $vs2026Path = "C:\Program Files\Microsoft Visual Studio\18\Enterprise\Common7\IDE\devenv.exe"
+          $vs2022Path = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\devenv.exe"
+          
+          if (Test-Path $vs2026Path) {
+            Write-Host "Found Visual Studio 18 (2026)"
+            "vs-generator=Visual Studio 18 2026" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "vs-version=18" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } elseif (Test-Path $vs2022Path) {
+            Write-Host "Found Visual Studio 17 2022"
+            "vs-generator=Visual Studio 17 2022" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "vs-version=17" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            Write-Host "Trying vswhere to find VS"
+            $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+            if ($vsPath) {
+              $vsVersion = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationVersion
+              $majorVersion = [int]$vsVersion.Split('.')[0]
+              Write-Host "Found VS version: $vsVersion (major: $majorVersion)"
+              if ($majorVersion -ge 18) {
+                "vs-generator=Visual Studio 18 2026" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+                "vs-version=18" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+              } else {
+                "vs-generator=Visual Studio 17 2022" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+                "vs-version=17" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+              }
+            } else {
+              Write-Error "No Visual Studio found!"
+              exit 1
+            }
+          }
+          
+          Write-Host "Using generator: $env:vs-generator"
+          Write-Host "VS Version: $env:vs-version"
+
+  # ================= Windows x64 build =================
   build-windows-x64:
     name: Build for Windows x64
     runs-on: windows-latest
+    needs: detect-vs
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,7 +85,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: obs-studio
-          key: obs-studio-official-x64
+          key: obs-studio-official-x64-v2
           
       - name: Clone OBS Studio (official)
         if: steps.cache-obs.outputs.cache-hit != 'true'
@@ -67,7 +116,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: curl
-          key: curl-latest-x64-v2
+          key: curl-latest-x64-v3
           
       - name: Download CURL for x64
         if: steps.cache-curl.outputs.cache-hit != 'true'
@@ -76,7 +125,7 @@ jobs:
           Invoke-WebRequest -Uri "https://curl.se/windows/latest.cgi?p=win64-mingw.zip" -OutFile curl.zip
           Expand-Archive curl.zip -DestinationPath curl-temp
           
-          # Find the extracted folder (it's usually something like curl-8.x.x-win64-mingw)
+          # Find the extracted folder
           $extractedFolder = Get-ChildItem -Path curl-temp -Directory | Select-Object -First 1
           
           # Create the curl directory structure
@@ -100,20 +149,29 @@ jobs:
         uses: actions/cache@v4
         with:
           path: obs-studio/build_x64
-          key: obs-build-official-x64
+          key: obs-build-official-x64-v3
           
       - name: Build OBS Libraries (x64)
         if: steps.cache-obs-build.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
+          $generator = "${{ needs.detect-vs.outputs.vs-generator }}"
           cd obs-studio
-          cmake -B build_x64 -S . -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DENABLE_BROWSER=OFF -DENABLE_SCRIPTING=OFF -DENABLE_UI=ON -DENABLE_PLUGINS=OFF -DENABLE_VIRTUALCAM=OFF -DCMAKE_PREFIX_PATH="${{ github.workspace }}/obs-deps"
+          cmake -B build_x64 -S . -G "$generator" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DENABLE_BROWSER=OFF `
+            -DENABLE_SCRIPTING=OFF `
+            -DENABLE_UI=ON `
+            -DENABLE_PLUGINS=OFF `
+            -DENABLE_VIRTUALCAM=OFF `
+            -DCMAKE_PREFIX_PATH="${{ github.workspace }}/obs-deps"
           cmake --build build_x64 --config Release --target libobs obs-frontend-api -- /m
           cd ..
           
       - name: Configure Plugin (x64)
         shell: pwsh
         run: |
+          $generator = "${{ needs.detect-vs.outputs.vs-generator }}"
           $obsDir = "${{ github.workspace }}/obs-studio"
           $curlDir = "${{ github.workspace }}/curl"
           $obsBuildDir = "$obsDir/build_x64"
@@ -141,7 +199,7 @@ jobs:
           Write-Host "CURL Library: $curlLibPath"
           Write-Host "CURL Include: $curlIncludePath"
           
-          cmake -B build -S . -G "Visual Studio 17 2022" -A x64 `
+          cmake -B build -S . -G "$generator" -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_PREFIX_PATH="$env:Qt6_DIR;${{ github.workspace }}/obs-deps;$obsBuildDir" `
             -Dlibobs_DIR="$obsBuildDir/libobs" `
@@ -161,7 +219,7 @@ jobs:
           # Copy plugin DLL
           Copy-Item "build/Release/${{ env.PLUGIN_NAME }}.dll" "release/obs-plugins/64bit/"
           
-          # Find and copy curl DLL (multiple possible locations)
+          # Find and copy curl DLL
           $curlDll = Get-ChildItem -Path curl -Filter "*.dll" -Recurse | Where-Object { 
             $_.Name -match "libcurl" -and $_.Directory.Name -match "bin" 
           } | Select-Object -First 1
@@ -205,9 +263,11 @@ jobs:
           name: ${{ env.PLUGIN_NAME }}-windows-x64-setup
           path: ${{ env.PLUGIN_NAME }}-*-setup.exe
 
+  # ================= Windows ARM64 build =================
   build-windows-arm64:
     name: Build for Windows ARM64 (Native)
     runs-on: windows-11-arm
+    needs: detect-vs
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -254,7 +314,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: obs-studio
-          key: obs-studio-fork-arm64
+          key: obs-studio-fork-arm64-v2
 
       - name: Clone OBS Studio with ARM64 support
         if: steps.cache-obs.outputs.cache-hit != 'true'
@@ -285,7 +345,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: curl
-          key: curl-latest-arm64
+          key: curl-latest-arm64-v2
 
       - name: Download CURL for ARM64
         if: steps.cache-curl.outputs.cache-hit != 'true'
@@ -298,13 +358,12 @@ jobs:
           else { Move-Item "curl-download/*" curl/ -Force }
           Remove-Item curl-download -Recurse -Force
 
-      # --- Cache OBS build (restore only) ---
       - name: Cache OBS build
         id: cache-obs-build
         uses: actions/cache@v4
         with:
           path: obs-studio/build_arm64
-          key: obs-build-fork-arm64
+          key: obs-build-fork-arm64-v2
 
       - name: Build OBS Libraries for ARM64 (using fork)
         if: steps.cache-obs-build.outputs.cache-hit != 'true'
@@ -327,6 +386,7 @@ jobs:
       - name: Configure Plugin for ARM64
         shell: pwsh
         run: |
+          $generator = "${{ needs.detect-vs.outputs.vs-generator }}"
           $obsDir = "${{ github.workspace }}/obs-studio"
           $curlDir = "${{ github.workspace }}/curl"
           $simdeDir = "${{ github.workspace }}/simde"
@@ -387,7 +447,8 @@ jobs:
           if (-not $curlLib) { $curlLib = Get-ChildItem -Path $curlDir -Filter "*.lib" -Recurse | Select-Object -First 1 }
           $curlLibPath = $curlLib.FullName -replace '\\', '/'
           
-          cmake -B build -S . -G "Visual Studio 17 2022" -A ARM64 -DCMAKE_BUILD_TYPE=RelWithDebInfo `
+          cmake -B build -S . -G "$generator" -A ARM64 `
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo `
             -DCMAKE_PREFIX_PATH="$qtCmakeDirCMake;${{ github.workspace }}/obs-deps;$obsBuildDirCMake" `
             -DQt6_DIR="$qtCmakeDirCMake" `
             -DQT_HOST_PATH="$hostQtPathCMake" `
@@ -455,7 +516,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: obs-studio
-          key: obs-studio-linux-${{ hashFiles('.github/workflows/build.yml') }}
+          key: obs-studio-linux-v2
 
       - name: Clone OBS Studio
         if: steps.cache-obs.outputs.cache-hit != 'true'
@@ -469,7 +530,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: obs-studio/build
-          key: obs-build-linux-${{ hashFiles('obs-studio/CMakeLists.txt') }}
+          key: obs-build-linux-v2
 
       - name: Build OBS libraries
         if: steps.cache-obs-build.outputs.cache-hit != 'true'
@@ -525,7 +586,7 @@ jobs:
           name: ${{ env.PLUGIN_NAME }}-linux-x86_64
           path: ${{ env.PLUGIN_NAME }}-*.tar.gz
 
-  # ================= Release job (original, unchanged) =================
+  # ================= Release job =================
   release:
     name: Create Release
     needs: [build-windows-x64, build-windows-arm64, build-linux-x64]
