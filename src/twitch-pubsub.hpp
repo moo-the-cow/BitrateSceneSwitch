@@ -13,36 +13,43 @@ namespace BitrateSwitch {
 
 class TwitchPubSubClient {
 public:
-	using RaidCallback = std::function<void(const std::string &targetLogin,
-						const std::string &displayName)>;
+    using RaidCallback = std::function<void(const std::string &targetLogin,
+                                            const std::string &displayName)>;
 
-	TwitchPubSubClient();
-	~TwitchPubSubClient();
+    TwitchPubSubClient();
+    ~TwitchPubSubClient();
 
-	void setRaidCallback(RaidCallback cb);
-	void setAuthToken(const std::string &token);  // NEW: Set OAuth token
-	void subscribeRaid(const std::string &broadcasterUserId);
-	void start();
-	void stop();
-	bool isConnected() const;
+    void setRaidCallback(RaidCallback cb);
+    void setAuthToken(const std::string &token);
+    void subscribeRaid(const std::string &broadcasterUserId);
+    void start();
+    void stop();
+    bool isConnected() const;
 
 private:
-	void workerMain();
-	void flushListen();
+    void workerMain();
+    void flushListen();
+    bool validateToken(const std::string &token);
+    
+    RaidCallback raidCb_;
+    std::string authToken_;
+    std::mutex mutex_;
+    std::vector<std::string> topics_;
+    bool resendListen_ = false;
+    std::atomic<bool> running_{false};
+    std::atomic<bool> connected_{false};
+    WsClient ws_;
+    std::thread worker_;
+    int nonce_ = 0;
 
-	RaidCallback raidCb_;
-	std::string authToken_;  // NEW: Store the OAuth token
-	std::mutex mutex_;
-	std::vector<std::string> topics_;
-	bool resendListen_ = false;
-	std::atomic<bool> running_{false};
-	std::atomic<bool> connected_{false};
-	WsClient ws_;
-	std::thread worker_;
-	int nonce_ = 0;
-
-	std::chrono::steady_clock::time_point lastRaidEmit_;
-	bool haveLastRaidEmit_ = false;
+    std::chrono::steady_clock::time_point lastRaidEmit_;
+    bool haveLastRaidEmit_ = false;
+    
+    // Stats for debugging
+    int pingsSent_ = 0;
+    int pongsReceived_ = 0;
+    int messagesReceived_ = 0;
+    int reconnects_ = 0;
 };
 
 } // namespace BitrateSwitch
