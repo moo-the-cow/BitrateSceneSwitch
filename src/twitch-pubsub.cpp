@@ -53,6 +53,16 @@ void TwitchPubSubClient::setRaidCallback(RaidCallback cb)
 	raidCb_ = std::move(cb);
 }
 
+void TwitchPubSubClient::setAuthToken(const std::string &token)
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	authToken_ = token;
+	// If we're connected, resend LISTEN with new token
+	if (connected_) {
+		resendListen_ = true;
+	}
+}
+
 void TwitchPubSubClient::subscribeRaid(const std::string &broadcasterUserId)
 {
 	if (broadcasterUserId.empty())
@@ -77,9 +87,6 @@ void TwitchPubSubClient::start()
 void TwitchPubSubClient::stop()
 {
 	running_ = false;
-	// let the worker notice running_ via its 1s recv timeout and exit
-	// before we tear down the socket -- libcurl is not safe against
-	// freeing the easy handle while another thread is in curl_ws_recv
 	if (worker_.joinable())
 		worker_.join();
 	ws_.disconnect();
@@ -94,13 +101,26 @@ bool TwitchPubSubClient::isConnected() const
 void TwitchPubSubClient::flushListen()
 {
 	std::vector<std::string> copy;
+	std::string token;
 	{
 		std::lock_guard<std::mutex> lock(mutex_);
 		copy = topics_;
+		token = authToken_;
 		resendListen_ = false;
 	}
 	if (copy.empty())
 		return;
+
+	// Validate token
+	if (token.empty()) {
+		blog(LOG_WARNING, "[BitrateSceneSwitch] PubSub: Cannot LISTEN - no auth token set");
+		return;
+	}
+
+	// Remove "oauth:" prefix if present (PubSub expects raw token)
+	if (token.find("oauth:") == 0) {
+		token = token.substr(6);
+	}
 
 	QJsonArray qtopics;
 	for (const auto &t : copy)
@@ -108,7 +128,7 @@ void TwitchPubSubClient::flushListen()
 
 	QJsonObject data;
 	data["topics"] = qtopics;
-	data["auth_token"] = QStringLiteral("");
+	data["auth_token"] = QString::fromStdString(token); // USE THE ACTUAL TOKEN
 
 	QJsonObject root;
 	root["type"] = QStringLiteral("LISTEN");
@@ -117,9 +137,20 @@ void TwitchPubSubClient::flushListen()
 
 	std::string json =
 		QJsonDocument(root).toJson(QJsonDocument::Compact).toStdString();
-	blog(LOG_INFO, "[BitrateSceneSwitch] PubSub: sending LISTEN for %zu topic(s)",
+	
+	// Don't log the actual token for security
+	blog(LOG_INFO, "[BitrateSceneSwitch] PubSub: sending LISTEN for %zu topic(s) with auth token",
 	     copy.size());
-	ws_.send(json);
+	
+	if (ws_.isConnected()) {
+		if (ws_.send(json)) {
+			blog(LOG_INFO, "[BitrateSceneSwitch] PubSub: LISTEN sent successfully");
+		} else {
+			blog(LOG_WARNING, "[BitrateSceneSwitch] PubSub: Failed to send LISTEN");
+		}
+	} else {
+		blog(LOG_WARNING, "[BitrateSceneSwitch] PubSub: Cannot send LISTEN - not connected");
+	}
 }
 
 void TwitchPubSubClient::workerMain()
@@ -136,17 +167,23 @@ void TwitchPubSubClient::workerMain()
 
 	blog(LOG_INFO, "[BitrateSceneSwitch] PubSub: Connected");
 	connected_ = true;
+
+	// Wait a moment for connection to stabilize, then flush LISTEN
+	std::this_thread::sleep_for(std::chrono::milliseconds(500));
 	flushListen();
 
+	// Send initial PING
 	QJsonObject initPing;
 	initPing["type"] = QStringLiteral("PING");
-	ws_.send(QJsonDocument(initPing)
-			 .toJson(QJsonDocument::Compact)
-			 .toStdString());
+	std::string pingJson = QJsonDocument(initPing)
+				   .toJson(QJsonDocument::Compact)
+				   .toStdString();
+	ws_.send(pingJson);
 
 	auto lastPing = std::chrono::steady_clock::now();
 
 	while (running_) {
+		// Check if we need to resend LISTEN
 		bool flush = false;
 		{
 			std::lock_guard<std::mutex> lock(mutex_);
@@ -168,13 +205,13 @@ void TwitchPubSubClient::workerMain()
 			if (elapsed >= 280) {
 				QJsonObject ping;
 				ping["type"] = QStringLiteral("PING");
-				ping["nonce"] = QString::number(++nonce_);
 				std::string pj =
 					QJsonDocument(ping)
 						.toJson(QJsonDocument::Compact)
 						.toStdString();
 				ws_.send(pj);
 				lastPing = std::chrono::steady_clock::now();
+				blog(LOG_DEBUG, "[BitrateSceneSwitch] PubSub: PING sent");
 			}
 			continue;
 		}
@@ -182,63 +219,102 @@ void TwitchPubSubClient::workerMain()
 		if (result != WsClient::RecvResult::Message)
 			break;
 
-		RaidCallback cbCopy;
-		{
-			std::lock_guard<std::mutex> lock(mutex_);
-			cbCopy = raidCb_;
-		}
-
 		QJsonParseError err{};
 		QJsonDocument doc =
 			QJsonDocument::fromJson(QByteArray::fromStdString(raw),
 						&err);
 		if (err.error != QJsonParseError::NoError || !doc.isObject())
 			continue;
+			
 		QJsonObject o = doc.object();
 		QString msgType = o.value(QLatin1String("type")).toString();
 
+		// Handle PONG
+		if (msgType == QLatin1String("PONG")) {
+			blog(LOG_DEBUG, "[BitrateSceneSwitch] PubSub: PONG received");
+			continue;
+		}
+
+		// Handle RECONNECT message from server
+		if (msgType == QLatin1String("RECONNECT")) {
+			blog(LOG_INFO, "[BitrateSceneSwitch] PubSub: Server requested reconnect");
+			break;
+		}
+
+		// Handle RESPONSE (LISTEN acknowledgment)
 		if (msgType == QLatin1String("RESPONSE")) {
 			QString error = o.value(QLatin1String("error")).toString();
 			if (!error.isEmpty()) {
 				blog(LOG_WARNING,
-				     "[BitrateSceneSwitch] PubSub LISTEN error: %s (giving up, fix config and reconnect)",
+				     "[BitrateSceneSwitch] PubSub LISTEN error: %s",
 				     error.toUtf8().constData());
-				// don't burn cycles retrying a known-bad topic;
-				// the switcher backoff will not restart us
-				// because pubsubWasConnected_ stays false here.
-				running_ = false;
-				break;
+				
+				// Check for authentication errors
+				if (error.contains("ERR_BADAUTH", Qt::CaseInsensitive)) {
+					blog(LOG_WARNING,
+					     "[BitrateSceneSwitch] PubSub: Authentication failed! Check your OAuth token. "
+					     "Make sure it has the 'channel:read:redemptions' scope and is valid.");
+				} else if (error.contains("ERR_BADTOPIC", Qt::CaseInsensitive)) {
+					blog(LOG_WARNING,
+					     "[BitrateSceneSwitch] PubSub: Bad topic. Make sure the broadcaster ID is correct.");
+				}
+				
+				// Don't break on error - let the caller decide whether to reconnect
+				continue;
 			}
 			blog(LOG_INFO,
-			     "[BitrateSceneSwitch] PubSub LISTEN acknowledged");
+			     "[BitrateSceneSwitch] PubSub LISTEN acknowledged successfully");
 			continue;
 		}
 
-		if (msgType == QLatin1String("PONG")) {
-			blog(LOG_DEBUG,
-			     "[BitrateSceneSwitch] PubSub: PONG received");
-			continue;
-		}
-
+		// Handle MESSAGE (actual events)
 		if (msgType != QLatin1String("MESSAGE"))
 			continue;
+
+		RaidCallback cbCopy;
+		{
+			std::lock_guard<std::mutex> lock(mutex_);
+			cbCopy = raidCb_;
+		}
+
 		QJsonObject data = o.value(QLatin1String("data")).toObject();
-		QString innerStr =
-			data.value(QLatin1String("message")).toString();
-		if (innerStr.isEmpty())
-			continue;
+		
+		// The message can be either a string or a JSON object
+		QString innerStr;
+		if (data.contains(QLatin1String("message"))) {
+			QJsonValue msgVal = data.value(QLatin1String("message"));
+			if (msgVal.isString()) {
+				innerStr = msgVal.toString();
+			} else if (msgVal.isObject()) {
+				QJsonObject msgObj = msgVal.toObject();
+				innerStr = QJsonDocument(msgObj).toJson(QJsonDocument::Compact);
+			}
+		}
+		
+		if (innerStr.isEmpty()) {
+			// Try parsing the data directly
+			QString dataTopic = data.value(QLatin1String("topic")).toString();
+			if (dataTopic.startsWith("raid.")) {
+				// The data itself might contain the raid info
+				innerStr = QJsonDocument(data).toJson(QJsonDocument::Compact);
+			} else {
+				continue;
+			}
+		}
 
 		QJsonDocument innerDoc =
 			QJsonDocument::fromJson(innerStr.toUtf8(), &err);
-		if (err.error != QJsonParseError::NoError ||
-		    !innerDoc.isObject())
+		if (err.error != QJsonParseError::NoError || !innerDoc.isObject())
 			continue;
+			
 		QJsonObject innerObj = innerDoc.object();
-		if (innerObj.value(QLatin1String("type")).toString() !=
-		    QLatin1String("raid_go_v2"))
+		QString eventType = innerObj.value(QLatin1String("type")).toString();
+		
+		if (eventType != QLatin1String("raid_go_v2") && 
+		    eventType != QLatin1String("raid_go"))
 			continue;
-		QJsonObject raid =
-			innerObj.value(QLatin1String("raid")).toObject();
+			
+		QJsonObject raid = innerObj.value(QLatin1String("raid")).toObject();
 		QString targetLogin =
 			raid.value(QLatin1String("target_login")).toString();
 		QString display =
