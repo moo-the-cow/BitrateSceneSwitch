@@ -12,7 +12,7 @@ env:
   PLUGIN_NAME: BitrateSceneSwitch
 
 jobs:
-  # ==================== Detect VS Version ====================
+  # ==================== Detect VS Version (x64) ====================
   detect-vs:
     name: Detect Visual Studio Version
     runs-on: windows-latest
@@ -58,6 +58,72 @@ jobs:
           
           Write-Host "Using generator: $env:vs-generator"
           Write-Host "VS Version: $env:vs-version"
+
+  # ==================== Detect VS Version (ARM64) ====================
+  detect-vs-arm64:
+    name: Detect Visual Studio Version (ARM64)
+    runs-on: windows-11-arm
+    outputs:
+      vs-generator: ${{ steps.detect.outputs.vs-generator }}
+      vs-version: ${{ steps.detect.outputs.vs-version }}
+    steps:
+      - name: Detect VS Generator on ARM64
+        id: detect
+        shell: pwsh
+        run: |
+          # Check for VS 2026 first, then VS 2022 (including ARM-native paths)
+          $vs2026Path = "C:\Program Files\Microsoft Visual Studio\18\Enterprise\Common7\IDE\devenv.exe"
+          $vs2026ArmPath = "C:\Program Files (Arm)\Microsoft Visual Studio\18\Enterprise\Common7\IDE\devenv.exe"
+          $vs2022Path = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\devenv.exe"
+          $vs2022ArmPath = "C:\Program Files (Arm)\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\devenv.exe"
+          
+          if (Test-Path $vs2026Path) {
+            Write-Host "Found Visual Studio 18 (2026) on ARM64"
+            "vs-generator=Visual Studio 18 2026" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "vs-version=18" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } elseif (Test-Path $vs2026ArmPath) {
+            Write-Host "Found Visual Studio 18 (2026) on ARM64 (Arm native)"
+            "vs-generator=Visual Studio 18 2026" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "vs-version=18" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } elseif (Test-Path $vs2022Path) {
+            Write-Host "Found Visual Studio 17 2022 on ARM64"
+            "vs-generator=Visual Studio 17 2022" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "vs-version=17" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } elseif (Test-Path $vs2022ArmPath) {
+            Write-Host "Found Visual Studio 17 2022 on ARM64 (Arm native)"
+            "vs-generator=Visual Studio 17 2022" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "vs-version=17" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            Write-Host "Trying vswhere on ARM64"
+            $vswherePath = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+            if (-not (Test-Path $vswherePath)) {
+              $vswherePath = "${env:ProgramFiles}\Microsoft Visual Studio\Installer\vswhere.exe"
+            }
+            if (Test-Path $vswherePath) {
+              $vsPath = & $vswherePath -latest -property installationPath
+              if ($vsPath) {
+                $vsVersion = & $vswherePath -latest -property installationVersion
+                $majorVersion = [int]$vsVersion.Split('.')[0]
+                Write-Host "Found VS version: $vsVersion (major: $majorVersion)"
+                if ($majorVersion -ge 18) {
+                  "vs-generator=Visual Studio 18 2026" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+                  "vs-version=18" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+                } else {
+                  "vs-generator=Visual Studio 17 2022" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+                  "vs-version=17" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+                }
+              } else {
+                Write-Error "No Visual Studio found on ARM64 runner!"
+                exit 1
+              }
+            } else {
+              Write-Error "No Visual Studio found on ARM64 runner!"
+              exit 1
+            }
+          }
+          
+          Write-Host "ARM64 Using generator: $env:vs-generator"
+          Write-Host "ARM64 VS Version: $env:vs-version"
 
   # ================= Windows x64 build =================
   build-windows-x64:
@@ -267,7 +333,7 @@ jobs:
   build-windows-arm64:
     name: Build for Windows ARM64 (Native)
     runs-on: windows-11-arm
-    needs: detect-vs
+    needs: detect-vs-arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -386,7 +452,7 @@ jobs:
       - name: Configure Plugin for ARM64
         shell: pwsh
         run: |
-          $generator = "${{ needs.detect-vs.outputs.vs-generator }}"
+          $generator = "${{ needs.detect-vs-arm64.outputs.vs-generator }}"
           $obsDir = "${{ github.workspace }}/obs-studio"
           $curlDir = "${{ github.workspace }}/curl"
           $simdeDir = "${{ github.workspace }}/simde"
