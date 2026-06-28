@@ -91,6 +91,9 @@ private:
     void sendChatMessage(const std::string &text);
     std::string formatTemplate(const std::string &tmpl, const std::string &sceneOverride = "");
 
+    // NEW: fetch broadcaster-id from Twitch API and start PubSub independently
+    void fetchBroadcasterIdAndStartPubsub(const ChatConfig &chatCfg);
+
     Config *config_;
     std::unique_ptr<ChatClient> twitchChat_;
     std::unique_ptr<KickChatClient> kickChat_;
