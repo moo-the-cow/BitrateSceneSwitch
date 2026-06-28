@@ -22,14 +22,12 @@ static const char *kPubSubUrl = "wss://pubsub-edge.twitch.tv";
 // Helper to get the plugin's config file path (cross‑platform)
 static std::string getConfigFilePath()
 {
-	// OBS stores plugin configs relative to the config directory
 	char *configPath = obs_module_config_path(nullptr);
 	std::string path;
 	if (configPath) {
 		path = configPath;
 		bfree(configPath);
 	}
-	// The file is saved as "BitrateSceneSwitch.json" by the plugin's Config::save()
 	if (path.empty())
 		path = "BitrateSceneSwitch.json";
 	else
