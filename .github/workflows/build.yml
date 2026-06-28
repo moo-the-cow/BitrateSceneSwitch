@@ -12,7 +12,7 @@ env:
   PLUGIN_NAME: BitrateSceneSwitch
 
 jobs:
-  # ==================== Detect VS Version ====================
+  # ==================== Detect VS for x64 ====================
   detect-vs-x64:
     name: Detect Visual Studio Version (x64)
     runs-on: windows-latest
@@ -23,7 +23,6 @@ jobs:
         id: detect
         shell: pwsh
         run: |
-          # Check for VS 2026 first, then VS 2022, then try vswhere
           $vsPaths = @(
             "C:\Program Files\Microsoft Visual Studio\18\Enterprise\Common7\IDE\devenv.exe",
             "C:\Program Files\Microsoft Visual Studio\18\Professional\Common7\IDE\devenv.exe",
@@ -32,7 +31,6 @@ jobs:
             "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\devenv.exe",
             "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe"
           )
-          
           $found = $false
           foreach ($path in $vsPaths) {
             if (Test-Path $path) {
@@ -49,7 +47,6 @@ jobs:
               }
             }
           }
-          
           if (-not $found) {
             Write-Host "Trying vswhere to find VS"
             $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
@@ -68,6 +65,7 @@ jobs:
             }
           }
 
+  # ==================== Detect VS for ARM64 ====================
   detect-vs-arm64:
     name: Detect Visual Studio Version (ARM64)
     runs-on: windows-11-arm
@@ -78,7 +76,6 @@ jobs:
         id: detect
         shell: pwsh
         run: |
-          # ARM64 runners might have VS installed in different locations or ARM-native VS
           $vsPaths = @(
             "C:\Program Files\Microsoft Visual Studio\18\Enterprise\Common7\IDE\devenv.exe",
             "C:\Program Files\Microsoft Visual Studio\18\Professional\Common7\IDE\devenv.exe",
@@ -87,10 +84,8 @@ jobs:
             "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\devenv.exe",
             "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe",
             "C:\Program Files (Arm)\Microsoft Visual Studio\18\Enterprise\Common7\IDE\devenv.exe",
-            "C:\Program Files (Arm)\Microsoft Visual Studio\18\Professional\Common7\IDE\devenv.exe",
             "C:\Program Files (Arm)\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\devenv.exe"
           )
-          
           $found = $false
           foreach ($path in $vsPaths) {
             if (Test-Path $path) {
@@ -107,16 +102,12 @@ jobs:
               }
             }
           }
-          
           if (-not $found) {
-            Write-Host "Trying vswhere to find VS on ARM64"
-            # Try x86 vswhere first
+            Write-Host "Trying vswhere on ARM64"
             $vswherePath = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
             if (-not (Test-Path $vswherePath)) {
-              # Try native ARM path
               $vswherePath = "${env:ProgramFiles}\Microsoft Visual Studio\Installer\vswhere.exe"
             }
-            
             if (Test-Path $vswherePath) {
               $vsPath = & $vswherePath -latest -property installationPath
               if ($vsPath) {
@@ -132,19 +123,9 @@ jobs:
               }
             }
           }
-          
           if (-not $found) {
-            # Last resort: try to find any cmake-compatible generator
-            Write-Host "No Visual Studio found, checking for other build tools..."
-            $clPath = Get-Command cl.exe -ErrorAction SilentlyContinue
-            if ($clPath) {
-              Write-Host "Found MSVC compiler at: $($clPath.Source)"
-              # Default to VS 2022 generator as it's more widely supported
-              "vs-generator=Visual Studio 17 2022" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            } else {
-              Write-Error "No Visual Studio or MSVC compiler found on ARM64 runner!"
-              exit 1
-            }
+            Write-Error "No Visual Studio found on ARM64 runner!"
+            exit 1
           }
 
   # ================= Windows x64 build =================
@@ -212,18 +193,14 @@ jobs:
         run: |
           Invoke-WebRequest -Uri "https://curl.se/windows/latest.cgi?p=win64-mingw.zip" -OutFile curl.zip
           Expand-Archive curl.zip -DestinationPath curl-temp
-          
           $extractedFolder = Get-ChildItem -Path curl-temp -Directory | Select-Object -First 1
-          
           New-Item -ItemType Directory -Force -Path curl/bin
           New-Item -ItemType Directory -Force -Path curl/include
           New-Item -ItemType Directory -Force -Path curl/lib
-          
           Copy-Item "$($extractedFolder.FullName)/bin/*" curl/bin/ -Recurse -ErrorAction SilentlyContinue
           Copy-Item "$($extractedFolder.FullName)/include/*" curl/include/ -Recurse -ErrorAction SilentlyContinue
           Copy-Item "$($extractedFolder.FullName)/lib/*" curl/lib/ -Recurse -ErrorAction SilentlyContinue
           Copy-Item "$($extractedFolder.FullName)/*.dll" curl/bin/ -ErrorAction SilentlyContinue
-          
           Remove-Item curl-temp -Recurse -Force
           
       - name: Cache OBS build
@@ -258,28 +235,13 @@ jobs:
           $obsDir = "${{ github.workspace }}/obs-studio"
           $curlDir = "${{ github.workspace }}/curl"
           $obsBuildDir = "$obsDir/build_x64"
-          
           $curlLib = Get-ChildItem -Path $curlDir -Filter "*.dll.a" -Recurse | Select-Object -First 1
-          if (-not $curlLib) { 
-            $curlLib = Get-ChildItem -Path $curlDir -Filter "*.lib" -Recurse | Select-Object -First 1 
-          }
-          if (-not $curlLib) {
-            $curlLibPath = "$curlDir/lib/libcurl.dll.a"
-          } else {
-            $curlLibPath = $curlLib.FullName
-          }
-          
+          if (-not $curlLib) { $curlLib = Get-ChildItem -Path $curlDir -Filter "*.lib" -Recurse | Select-Object -First 1 }
+          if (-not $curlLib) { $curlLibPath = "$curlDir/lib/libcurl.dll.a" } else { $curlLibPath = $curlLib.FullName }
           $curlInclude = Get-ChildItem -Path $curlDir -Directory -Filter "include" -Recurse | Select-Object -First 1
-          if (-not $curlInclude) {
-            $curlIncludePath = "$curlDir/include"
-          } else {
-            $curlIncludePath = $curlInclude.FullName
-          }
-          
+          if (-not $curlInclude) { $curlIncludePath = "$curlDir/include" } else { $curlIncludePath = $curlInclude.FullName }
           Write-Host "CURL Library: $curlLibPath"
           Write-Host "CURL Include: $curlIncludePath"
-          Write-Host "Using generator: $generator"
-          
           cmake -B build -S . -G "$generator" -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_PREFIX_PATH="$env:Qt6_DIR;${{ github.workspace }}/obs-deps;$obsBuildDir" `
@@ -296,30 +258,11 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "release/obs-plugins/64bit", "release/data/obs-plugins/${{ env.PLUGIN_NAME }}"
-          
           Copy-Item "build/Release/${{ env.PLUGIN_NAME }}.dll" "release/obs-plugins/64bit/"
-          
-          $curlDll = Get-ChildItem -Path curl -Filter "*.dll" -Recurse | Where-Object { 
-            $_.Name -match "libcurl" -and $_.Directory.Name -match "bin" 
-          } | Select-Object -First 1
-          
-          if (-not $curlDll) {
-            $curlDll = Get-ChildItem -Path curl -Filter "*.dll" -Recurse | Select-Object -First 1
-          }
-          
-          if ($curlDll) { 
-            Write-Host "Copying curl DLL: $($curlDll.FullName)"
-            Copy-Item $curlDll.FullName "release/obs-plugins/64bit/" 
-          } else {
-            Write-Host "Warning: curl DLL not found"
-          }
-          
-          if (Test-Path "data") { 
-            Copy-Item -Recurse "data/*" "release/data/obs-plugins/${{ env.PLUGIN_NAME }}/" 
-          }
-          
-          Write-Host "Packaged files:"
-          Get-ChildItem release -Recurse | ForEach-Object { Write-Host $_.FullName }
+          $curlDll = Get-ChildItem -Path curl -Filter "*.dll" -Recurse | Where-Object { $_.Name -match "libcurl" -and $_.Directory.Name -match "bin" } | Select-Object -First 1
+          if (-not $curlDll) { $curlDll = Get-ChildItem -Path curl -Filter "*.dll" -Recurse | Select-Object -First 1 }
+          if ($curlDll) { Copy-Item $curlDll.FullName "release/obs-plugins/64bit/" }
+          if (Test-Path "data") { Copy-Item -Recurse "data/*" "release/data/obs-plugins/${{ env.PLUGIN_NAME }}/" }
           
       - name: Build Installer (x64)
         shell: pwsh
@@ -383,8 +326,7 @@ jobs:
       - name: Download SIMDe
         if: steps.cache-simde.outputs.cache-hit != 'true'
         shell: pwsh
-        run: |
-          git clone --depth 1 https://github.com/simd-everywhere/simde.git simde
+        run: git clone --depth 1 https://github.com/simd-everywhere/simde.git simde
 
       - name: Cache OBS Studio source (fork)
         id: cache-obs
@@ -465,7 +407,6 @@ jobs:
         run: |
           $generator = "${{ needs.detect-vs-arm64.outputs.vs-generator }}"
           Write-Host "Using generator: $generator for ARM64"
-          
           $obsDir = "${{ github.workspace }}/obs-studio"
           $curlDir = "${{ github.workspace }}/curl"
           $simdeDir = "${{ github.workspace }}/simde"
@@ -530,9 +471,7 @@ jobs:
           } else {
             $curlLibPath = $curlLib.FullName -replace '\\', '/'
           }
-          
           Write-Host "CURL Library: $curlLibPath"
-          Write-Host "Using generator: $generator"
           
           cmake -B build -S . -G "$generator" -A ARM64 `
             -DCMAKE_BUILD_TYPE=RelWithDebInfo `
@@ -584,10 +523,7 @@ jobs:
             libxkbcommon-dev libwayland-dev libpipewire-0.3-dev \
             libxcb-shm0-dev libxcb-xfixes0-dev libxcb-xinerama0-dev \
             libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev \
-            uthash-dev \
-            libjansson-dev \
-            libx11-xcb-dev \
-            libxkbcommon-x11-dev
+            uthash-dev libjansson-dev libx11-xcb-dev libxkbcommon-x11-dev
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v3
@@ -649,17 +585,13 @@ jobs:
         run: |
           mkdir -p release/obs-plugins/64bit
           mkdir -p release/data/obs-plugins/${{ env.PLUGIN_NAME }}
-          
           SO_PATH="build-plugin/lib${{ env.PLUGIN_NAME }}.so"
           if [ -f "$SO_PATH" ]; then
             cp "$SO_PATH" release/obs-plugins/64bit/
           else
             find build-plugin -name "*.so" -exec cp {} release/obs-plugins/64bit/ \;
           fi
-          
-          if [ -d "data" ]; then
-            cp -r data/* release/data/obs-plugins/${{ env.PLUGIN_NAME }}/
-          fi
+          if [ -d "data" ]; then cp -r data/* release/data/obs-plugins/${{ env.PLUGIN_NAME }}/; fi
 
       - name: Create tarball
         run: |
