@@ -1,4 +1,5 @@
 #include "settings-dialog.hpp"
+#include "irlchat-client.hpp"
 #include "switcher.hpp"
 
 #include <QVBoxLayout>
@@ -510,7 +511,7 @@ QWidget *SettingsDialog::createGeneralPage()
     onlyWhenStreamingCheckbox_ = new QCheckBox("Only switch when streaming", page);
     instantRecoverCheckbox_ = new QCheckBox("Instantly switch on bitrate recovery", page);
     autoNotifyCheckbox_ = new QCheckBox("Enable auto-switch notifications", page);
-    autoNotifyCheckbox_->setToolTip("Announce automatic scene switches in chat (Twitch only)");
+    autoNotifyCheckbox_->setToolTip("Announce automatic scene switches in configured chat targets");
 
     retryAttemptsSpinBox_ = new QSpinBox(page);
     retryAttemptsSpinBox_->setRange(1, 30);
@@ -683,6 +684,8 @@ QWidget *SettingsDialog::createChatPage()
     connForm->setContentsMargins(12, 24, 12, 12);
 
     chatEnabledCheckbox_ = new QCheckBox("Enable chat integration", page);
+    chatConnectionModeCombo_ = new QComboBox(page);
+    chatConnectionModeCombo_->addItems({"Twitch OAuth token + Kick read-only", "Pair with IRLchat"});
     chatPlatformCombo_ = new QComboBox(page);
     chatPlatformCombo_->addItems({"Twitch", "Kick"});
 
@@ -700,21 +703,51 @@ QWidget *SettingsDialog::createChatPage()
     kickChatroomIdEdit_ = new QLineEdit(page);
     kickChatroomIdEdit_->setPlaceholderText("numeric chatroom id");
 
+    directPlatformLabel_ = new QLabel("Platform:", page);
+    directChannelLabel_ = new QLabel("Channel:", page);
     twitchBotLabel_ = new QLabel("Bot Username:", page);
     twitchOauthLabel_ = new QLabel("OAuth Token:", page);
     kickChannelLabel_ = new QLabel("Channel ID:", page);
     kickChatroomLabel_ = new QLabel("Chatroom ID:", page);
 
     connForm->addRow(chatEnabledCheckbox_);
-    connForm->addRow("Platform:", chatPlatformCombo_);
-    connForm->addRow("Channel:", chatChannelEdit_);
+    connForm->addRow("Connection:", chatConnectionModeCombo_);
+    connForm->addRow(directPlatformLabel_, chatPlatformCombo_);
+    connForm->addRow(directChannelLabel_, chatChannelEdit_);
     connForm->addRow(twitchBotLabel_, chatBotUsernameEdit_);
     connForm->addRow(twitchOauthLabel_, chatOauthEdit_);
     connForm->addRow(kickChannelLabel_, kickChannelIdEdit_);
     connForm->addRow(kickChatroomLabel_, kickChatroomIdEdit_);
+    connect(chatConnectionModeCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &SettingsDialog::updateChatPlatformUi);
     connect(chatPlatformCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &SettingsDialog::updateChatPlatformUi);
     layout->addWidget(connGroup);
+
+    irlChatGroup_ = new QGroupBox("IRLchat Pairing", page);
+    QFormLayout *irlChatForm = new QFormLayout(irlChatGroup_);
+    irlChatPairCodeEdit_ = new QLineEdit(page);
+    irlChatPairCodeEdit_->setPlaceholderText("6-digit code from the IRLchat dashboard");
+    irlChatPairCodeEdit_->setMaxLength(6);
+    irlChatPairButton_ = new QPushButton("Pair", page);
+    irlChatDisconnectButton_ = new QPushButton("Forget Pairing", page);
+    irlChatDisconnectButton_->setToolTip("Remove this token from BSS; revoke it from the IRLchat dashboard if needed");
+    irlChatStatusLabel_ = new QLabel("Not paired", page);
+    irlChatAnnounceTwitchCheckbox_ = new QCheckBox("Announce on Twitch", page);
+    irlChatAnnounceKickCheckbox_ = new QCheckBox("Announce on Kick", page);
+    QHBoxLayout *pairRow = new QHBoxLayout();
+    pairRow->addWidget(irlChatPairCodeEdit_);
+    pairRow->addWidget(irlChatPairButton_);
+    pairRow->addWidget(irlChatDisconnectButton_);
+    QHBoxLayout *announceRow = new QHBoxLayout();
+    announceRow->addWidget(irlChatAnnounceTwitchCheckbox_);
+    announceRow->addWidget(irlChatAnnounceKickCheckbox_);
+    irlChatForm->addRow("Pairing Code:", pairRow);
+    irlChatForm->addRow("Status:", irlChatStatusLabel_);
+    irlChatForm->addRow("Automatic announcements:", announceRow);
+    connect(irlChatPairButton_, &QPushButton::clicked, this, &SettingsDialog::pairIrlChat);
+    connect(irlChatDisconnectButton_, &QPushButton::clicked, this, &SettingsDialog::disconnectIrlChat);
+    layout->addWidget(irlChatGroup_);
 
     QGroupBox *permGroup = new QGroupBox("Permissions", page);
     QFormLayout *permForm = new QFormLayout(permGroup);
@@ -725,7 +758,7 @@ QWidget *SettingsDialog::createChatPage()
     chatAdminsEdit_ = new QLineEdit(page);
     chatAdminsEdit_->setPlaceholderText("user1, user2 (empty = channel owner only)");
     chatAutoStopRaidCheckbox_ = new QCheckBox("Stop stream when raiding / hosting out", page);
-    chatAnnounceRaidStopCheckbox_ = new QCheckBox("Announce raid stop in chat (Twitch only)", page);
+    chatAnnounceRaidStopCheckbox_ = new QCheckBox("Announce raid stop in configured chats", page);
 
     permForm->addRow("Allowed Users:", chatAdminsEdit_);
     permForm->addRow(chatAutoStopRaidCheckbox_);
@@ -993,12 +1026,18 @@ void SettingsDialog::loadSettings()
 
     // Chat
     chatEnabledCheckbox_->setChecked(config_->chat.enabled);
+    chatConnectionModeCombo_->setCurrentIndex(static_cast<int>(config_->chat.connectionMode));
     chatPlatformCombo_->setCurrentIndex(static_cast<int>(config_->chat.platform));
     chatChannelEdit_->setText(QString::fromStdString(config_->chat.channel));
     chatBotUsernameEdit_->setText(QString::fromStdString(config_->chat.botUsername));
     chatOauthEdit_->setText(QString::fromStdString(config_->chat.oauthToken));
     kickChannelIdEdit_->setText(QString::number(config_->chat.kickChannelId));
     kickChatroomIdEdit_->setText(QString::number(config_->chat.kickChatroomId));
+    irlChatToken_ = config_->chat.irlChatToken;
+    irlChatStatusLabel_->setText(irlChatToken_.empty() ? "Not paired" : "Paired");
+    irlChatDisconnectButton_->setEnabled(!irlChatToken_.empty());
+    irlChatAnnounceTwitchCheckbox_->setChecked(config_->chat.irlChatAnnounceTwitch);
+    irlChatAnnounceKickCheckbox_->setChecked(config_->chat.irlChatAnnounceKick);
     chatAutoStopRaidCheckbox_->setChecked(config_->chat.autoStopStreamOnRaid);
     chatAnnounceRaidStopCheckbox_->setChecked(config_->chat.announceRaidStop);
     updateChatPlatformUi();
@@ -1097,12 +1136,16 @@ void SettingsDialog::saveSettings()
     config_->sortServersByPriority();
 
     config_->chat.enabled = chatEnabledCheckbox_->isChecked();
+    config_->chat.connectionMode = static_cast<ChatConnectionMode>(chatConnectionModeCombo_->currentIndex());
     config_->chat.platform = static_cast<ChatPlatform>(chatPlatformCombo_->currentIndex());
     config_->chat.channel = chatChannelEdit_->text().toStdString();
     config_->chat.botUsername = chatBotUsernameEdit_->text().toStdString();
     config_->chat.oauthToken = chatOauthEdit_->text().toStdString();
     config_->chat.kickChannelId = kickChannelIdEdit_->text().trimmed().toULongLong();
     config_->chat.kickChatroomId = kickChatroomIdEdit_->text().trimmed().toULongLong();
+    config_->chat.irlChatToken = irlChatToken_;
+    config_->chat.irlChatAnnounceTwitch = irlChatAnnounceTwitchCheckbox_->isChecked();
+    config_->chat.irlChatAnnounceKick = irlChatAnnounceKickCheckbox_->isChecked();
     config_->chat.autoStopStreamOnRaid = chatAutoStopRaidCheckbox_->isChecked();
     config_->chat.announceRaidStop = chatAnnounceRaidStopCheckbox_->isChecked();
 
@@ -1174,24 +1217,74 @@ void SettingsDialog::onSave()
     accept();
 }
 
+void SettingsDialog::pairIrlChat()
+{
+    QString code = irlChatPairCodeEdit_->text().trimmed();
+    bool digitsOnly = code.size() == 6;
+    for (QChar character : code)
+        digitsOnly = digitsOnly && character.isDigit();
+    if (!digitsOnly) {
+        QMessageBox::warning(this, "IRLchat Pairing", "Enter the 6-digit code from the IRLchat dashboard.");
+        return;
+    }
+
+    std::string token;
+    std::string error;
+    if (!IrlChatClient::pair(code.toStdString(), token, error)) {
+        QMessageBox::warning(this, "IRLchat Pairing", QString::fromStdString(error));
+        return;
+    }
+
+    irlChatToken_ = std::move(token);
+    config_->lockWrite();
+    config_->chat.irlChatToken = irlChatToken_;
+    config_->unlockWrite();
+    obs_frontend_save();
+    irlChatPairCodeEdit_->clear();
+    irlChatStatusLabel_->setText("Paired — apply settings to connect");
+    irlChatDisconnectButton_->setEnabled(true);
+    chatConnectionModeCombo_->setCurrentIndex(static_cast<int>(ChatConnectionMode::IrlChat));
+}
+
+void SettingsDialog::disconnectIrlChat()
+{
+    irlChatToken_.clear();
+    config_->lockWrite();
+    config_->chat.irlChatToken.clear();
+    config_->unlockWrite();
+    obs_frontend_save();
+    if (switcher_)
+        switcher_->requestChatReconnect();
+    irlChatStatusLabel_->setText("Not paired");
+    irlChatDisconnectButton_->setEnabled(false);
+}
+
 void SettingsDialog::updateChatPlatformUi()
 {
+    bool irlChat = chatConnectionModeCombo_->currentIndex() ==
+                   static_cast<int>(ChatConnectionMode::IrlChat);
     bool twitch = chatPlatformCombo_->currentIndex() == static_cast<int>(ChatPlatform::Twitch);
-    twitchBotLabel_->setVisible(twitch);
-    chatBotUsernameEdit_->setVisible(twitch);
-    twitchOauthLabel_->setVisible(twitch);
-    chatOauthEdit_->setVisible(twitch);
-    kickChannelLabel_->setVisible(!twitch);
-    kickChannelIdEdit_->setVisible(!twitch);
-    kickChatroomLabel_->setVisible(!twitch);
-    kickChatroomIdEdit_->setVisible(!twitch);
-    chatAnnounceRaidStopCheckbox_->setEnabled(twitch);
+    directPlatformLabel_->setVisible(!irlChat);
+    chatPlatformCombo_->setVisible(!irlChat);
+    directChannelLabel_->setVisible(!irlChat);
+    chatChannelEdit_->setVisible(!irlChat);
+    twitchBotLabel_->setVisible(!irlChat && twitch);
+    chatBotUsernameEdit_->setVisible(!irlChat && twitch);
+    twitchOauthLabel_->setVisible(!irlChat && twitch);
+    chatOauthEdit_->setVisible(!irlChat && twitch);
+    kickChannelLabel_->setVisible(!irlChat && !twitch);
+    kickChannelIdEdit_->setVisible(!irlChat && !twitch);
+    kickChatroomLabel_->setVisible(!irlChat && !twitch);
+    kickChatroomIdEdit_->setVisible(!irlChat && !twitch);
+    irlChatGroup_->setVisible(irlChat);
+    chatAnnounceRaidStopCheckbox_->setEnabled(irlChat || twitch);
 }
 
 void SettingsDialog::updateStreamingFieldStates()
 {
     bool streaming = switcher_ && switcher_->isCurrentlyStreaming();
     chatEnabledCheckbox_->setEnabled(!streaming);
+    chatConnectionModeCombo_->setEnabled(!streaming);
     chatPlatformCombo_->setEnabled(!streaming);
     chatChannelEdit_->setEnabled(!streaming);
     chatBotUsernameEdit_->setEnabled(!streaming);
@@ -1221,6 +1314,11 @@ void SettingsDialog::refreshStatus()
     } else {
         statusLabel_->setStyleSheet("color: #a6e3a1; font-weight: bold; font-size: 13px;");
         bitrateLabel_->setStyleSheet("color: #89dceb; font-weight: bold; font-size: 13px;");
+    }
+
+    if (chatConnectionModeCombo_->currentIndex() == static_cast<int>(ChatConnectionMode::IrlChat) &&
+        !irlChatToken_.empty()) {
+        irlChatStatusLabel_->setText(switcher_->isChatConnected() ? "Connected" : "Paired — not connected");
     }
 
     updateStreamingFieldStates();

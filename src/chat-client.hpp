@@ -43,6 +43,7 @@ enum class ChatCommand {
 };
 
 struct ChatMessage {
+    ChatPlatform platform = ChatPlatform::Twitch;
     std::string username;
     std::string message;
     ChatCommand command = ChatCommand::None;

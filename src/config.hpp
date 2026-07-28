@@ -112,9 +112,15 @@ enum class ChatPlatform {
     Kick = 1
 };
 
+enum class ChatConnectionMode {
+    Direct = 0,
+    IrlChat = 1
+};
+
 // Chat configuration for bot commands
 struct ChatConfig {
     bool enabled = false;
+    ChatConnectionMode connectionMode = ChatConnectionMode::Direct;
     ChatPlatform platform = ChatPlatform::Twitch;
     std::string channel;                      // Twitch: login. Kick: channel slug (lowercase)
     std::string botUsername;                  // Bot username for login
@@ -124,6 +130,10 @@ struct ChatConfig {
     // Kick: numeric ids (channel page / network tools)
     uint64_t kickChannelId = 0;
     uint64_t kickChatroomId = 0;
+
+    std::string irlChatToken;
+    bool irlChatAnnounceTwitch = true;
+    bool irlChatAnnounceKick = true;
 
     // Twitch PubSub raid.* and Kick host/raid events: optional auto-stop when raiding out
     bool autoStopStreamOnRaid = true;

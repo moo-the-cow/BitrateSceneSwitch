@@ -27,7 +27,7 @@ public:
 	WsClient();
 	~WsClient();
 
-	bool connect(const std::string &url);
+	bool connect(const std::string &url, const std::string &header = "");
 	void disconnect();
 	bool send(const std::string &text);
 	RecvResult recv(std::string &out);
@@ -40,6 +40,7 @@ private:
 	HINTERNET websocket_ = nullptr;
 #else
 	CURL *curl_ = nullptr;
+	struct curl_slist *headers_ = nullptr;
 #endif
 	std::atomic<bool> connected_{false};
 };

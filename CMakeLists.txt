@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(BitrateSceneSwitch VERSION 1.0.8)
+project(BitrateSceneSwitch VERSION 1.0.9)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -63,6 +63,8 @@ add_library(${PROJECT_NAME} MODULE
     src/ws-client.hpp
     src/kick-chat.cpp
     src/kick-chat.hpp
+    src/irlchat-client.cpp
+    src/irlchat-client.hpp
     src/twitch-pubsub.cpp
     src/twitch-pubsub.hpp
     src/update-checker.cpp

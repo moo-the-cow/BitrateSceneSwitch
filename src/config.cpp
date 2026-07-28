@@ -142,12 +142,16 @@ obs_data_t *Config::save()
 
     // Chat configuration
     obs_data_set_bool(data, "chat_enabled", chat.enabled);
+    obs_data_set_int(data, "chat_connection_mode", static_cast<int>(chat.connectionMode));
     obs_data_set_int(data, "chat_platform", static_cast<int>(chat.platform));
     obs_data_set_string(data, "chat_channel", chat.channel.c_str());
     obs_data_set_string(data, "chat_bot_username", chat.botUsername.c_str());
     obs_data_set_string(data, "chat_oauth_token", chat.oauthToken.c_str());
     obs_data_set_int(data, "kick_channel_id", static_cast<long long>(chat.kickChannelId));
     obs_data_set_int(data, "kick_chatroom_id", static_cast<long long>(chat.kickChatroomId));
+    obs_data_set_string(data, "irlchat_token", chat.irlChatToken.c_str());
+    obs_data_set_bool(data, "irlchat_announce_twitch", chat.irlChatAnnounceTwitch);
+    obs_data_set_bool(data, "irlchat_announce_kick", chat.irlChatAnnounceKick);
     obs_data_set_bool(data, "chat_auto_stop_raid", chat.autoStopStreamOnRaid);
     obs_data_set_bool(data, "chat_announce_raid_stop", chat.announceRaidStop);
     
@@ -292,6 +296,11 @@ void Config::load(obs_data_t *data)
 
     // Chat configuration
     chat.enabled = obs_data_get_bool(data, "chat_enabled");
+    chat.connectionMode = obs_data_has_user_value(data, "chat_connection_mode") &&
+                                  obs_data_get_int(data, "chat_connection_mode") ==
+                                      static_cast<int>(ChatConnectionMode::IrlChat)
+                              ? ChatConnectionMode::IrlChat
+                              : ChatConnectionMode::Direct;
     {
         int p = static_cast<int>(obs_data_get_int(data, "chat_platform"));
         if (p != static_cast<int>(ChatPlatform::Kick))
@@ -313,6 +322,12 @@ void Config::load(obs_data_t *data)
     }
     chat.kickChannelId = static_cast<uint64_t>(obs_data_get_int(data, "kick_channel_id"));
     chat.kickChatroomId = static_cast<uint64_t>(obs_data_get_int(data, "kick_chatroom_id"));
+    const char *irlChatToken = obs_data_get_string(data, "irlchat_token");
+    if (irlChatToken) chat.irlChatToken = irlChatToken;
+    chat.irlChatAnnounceTwitch = obs_data_has_user_value(data, "irlchat_announce_twitch")
+        ? obs_data_get_bool(data, "irlchat_announce_twitch") : true;
+    chat.irlChatAnnounceKick = obs_data_has_user_value(data, "irlchat_announce_kick")
+        ? obs_data_get_bool(data, "irlchat_announce_kick") : true;
     chat.autoStopStreamOnRaid = obs_data_has_user_value(data, "chat_auto_stop_raid")
         ? obs_data_get_bool(data, "chat_auto_stop_raid") : true;
     chat.announceRaidStop = obs_data_has_user_value(data, "chat_announce_raid_stop")

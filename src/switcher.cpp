@@ -157,7 +157,9 @@ void Switcher::switcherThread()
         bool chatConnected = false;
         {
             std::lock_guard<std::mutex> clock(chatMutex_);
-            if (kickChat_)
+            if (irlChat_)
+                chatConnected = irlChat_->isConnected();
+            else if (kickChat_)
                 chatConnected = kickChat_->isConnected();
             else if (twitchChat_)
                 chatConnected = twitchChat_->isConnected();
@@ -184,20 +186,24 @@ void Switcher::switcherThread()
             }
         }
 
-        if (config_->chat.enabled && !chatConnected) {
-            bool hasCreds = false;
-            {
-                config_->lockRead();
-                if (config_->chat.platform == ChatPlatform::Kick) {
-                    hasCreds = !config_->chat.channel.empty() &&
-                               config_->chat.kickChannelId != 0 &&
-                               config_->chat.kickChatroomId != 0;
-                } else {
-                    hasCreds = !config_->chat.channel.empty() &&
-                               !config_->chat.oauthToken.empty();
-                }
-                config_->unlockRead();
+        bool chatEnabled = false;
+        bool hasCreds = false;
+        {
+            config_->lockRead();
+            chatEnabled = config_->chat.enabled;
+            if (config_->chat.connectionMode == ChatConnectionMode::IrlChat) {
+                hasCreds = !config_->chat.irlChatToken.empty();
+            } else if (config_->chat.platform == ChatPlatform::Kick) {
+                hasCreds = !config_->chat.channel.empty() &&
+                           config_->chat.kickChannelId != 0 &&
+                           config_->chat.kickChatroomId != 0;
+            } else {
+                hasCreds = !config_->chat.channel.empty() &&
+                           !config_->chat.oauthToken.empty();
             }
+            config_->unlockRead();
+        }
+        if (chatEnabled && !chatConnected) {
             if (hasCreds) {
                 auto now = std::chrono::steady_clock::now();
                 if (now >= chatNextReconnect_) {
@@ -211,7 +217,7 @@ void Switcher::switcherThread()
                     chatNextReconnect_ = now + std::chrono::seconds(chatReconnectDelay_);
                 }
             }
-        } else if (config_->chat.enabled && chatConnected) {
+        } else if (chatEnabled && chatConnected) {
             chatReconnectDelay_ = 0;
         }
 
@@ -804,8 +810,36 @@ void Switcher::connectChat()
     }
     twitchChat_.reset();
     kickChat_.reset();
+    irlChat_.reset();
     pubsubWasConnected_ = false;
     pubsubRetryDelay_ = 0;
+
+    if (chatCfg.connectionMode == ChatConnectionMode::IrlChat) {
+        irlChat_ = std::make_unique<IrlChatClient>();
+        irlChat_->setConfig(chatCfg);
+        irlChat_->setCommandCallback([this](const ChatMessage &msg) {
+            handleChatCommand(msg);
+        });
+        irlChat_->setRaidCallback([this](const std::string &slug, const std::string &display) {
+            handleRaidStop(slug, display);
+        });
+        if (wantPubSub) {
+            twitchPubSub_ = std::make_unique<TwitchPubSubClient>();
+            twitchPubSub_->setRaidCallback([this](const std::string &login, const std::string &display) {
+                handleRaidStop(login, display);
+            });
+            irlChat_->setAccountCallback([this](const std::string &userId) {
+                std::lock_guard<std::mutex> lock(chatMutex_);
+                if (twitchPubSub_) {
+                    twitchPubSub_->subscribeRaid(userId);
+                    twitchPubSub_->start();
+                }
+            });
+        }
+        if (irlChat_->connect())
+            blog(LOG_INFO, "[BitrateSceneSwitch] Chat connecting through IRLchat");
+        return;
+    }
 
     if (chatCfg.platform == ChatPlatform::Kick) {
         kickChat_ = std::make_unique<KickChatClient>();
@@ -857,6 +891,7 @@ void Switcher::disconnectChat()
     }
     twitchChat_.reset();
     kickChat_.reset();
+    irlChat_.reset();
     pubsubWasConnected_ = false;
     blog(LOG_INFO, "[BitrateSceneSwitch] Chat disconnected");
 }
@@ -864,6 +899,8 @@ void Switcher::disconnectChat()
 bool Switcher::isChatConnected() const
 {
     std::lock_guard<std::mutex> lock(chatMutex_);
+    if (irlChat_)
+        return irlChat_->isConnected();
     if (kickChat_)
         return kickChat_->isConnected();
     if (twitchChat_)
@@ -871,11 +908,36 @@ bool Switcher::isChatConnected() const
     return false;
 }
 
-void Switcher::sendChatMessage(const std::string &text)
+void Switcher::sendChatMessage(const std::string &text, ChatPlatform platform)
 {
     std::lock_guard<std::mutex> lock(chatMutex_);
-    if (twitchChat_ && twitchChat_->isConnected())
+    if (irlChat_ && irlChat_->isConnected())
+        irlChat_->sendMessage(platform, text);
+    else if (platform == ChatPlatform::Twitch && twitchChat_ && twitchChat_->isConnected())
         twitchChat_->sendMessage(text);
+}
+
+void Switcher::sendAnnouncement(const std::string &text)
+{
+    ChatConnectionMode mode;
+    ChatPlatform platform;
+    bool twitch;
+    bool kick;
+    config_->lockRead();
+    mode = config_->chat.connectionMode;
+    platform = config_->chat.platform;
+    twitch = config_->chat.irlChatAnnounceTwitch;
+    kick = config_->chat.irlChatAnnounceKick;
+    config_->unlockRead();
+
+    if (mode == ChatConnectionMode::IrlChat) {
+        if (twitch)
+            sendChatMessage(text, ChatPlatform::Twitch);
+        if (kick)
+            sendChatMessage(text, ChatPlatform::Kick);
+    } else if (platform == ChatPlatform::Twitch) {
+        sendChatMessage(text, ChatPlatform::Twitch);
+    }
 }
 
 void Switcher::handleRaidStop(const std::string &targetLogin, const std::string &displayName)
@@ -883,14 +945,12 @@ void Switcher::handleRaidStop(const std::string &targetLogin, const std::string 
     bool enabled = false;
     bool autoStop = false;
     bool announce = false;
-    ChatPlatform plat = ChatPlatform::Twitch;
     std::string tmpl;
 
     config_->lockRead();
     enabled = config_->enabled;
     autoStop = config_->chat.autoStopStreamOnRaid;
     announce = config_->chat.announceRaidStop;
-    plat = config_->chat.platform;
     tmpl = config_->messages.raidStop;
     config_->unlockRead();
 
@@ -914,7 +974,7 @@ void Switcher::handleRaidStop(const std::string &targetLogin, const std::string 
     blog(LOG_INFO, "[BitrateSceneSwitch] Stopping stream due to raid -> %s",
          targetLogin.c_str());
 
-    if (announce && plat == ChatPlatform::Twitch) {
+    if (announce) {
         std::string msg = tmpl;
         const std::string &sub = !targetLogin.empty() ? targetLogin : displayName;
         size_t pos = 0;
@@ -922,7 +982,7 @@ void Switcher::handleRaidStop(const std::string &targetLogin, const std::string 
             msg.replace(pos, 8, sub);
             pos += sub.length();
         }
-        sendChatMessage(msg);
+        sendAnnouncement(msg);
     }
 
     obs_queue_task(
@@ -935,7 +995,9 @@ void Switcher::handleChatCommand(const ChatMessage& msg)
     blog(LOG_INFO, "[BitrateSceneSwitch] Chat command from %s: %s", 
          msg.username.c_str(), msg.message.c_str());
 
-    auto reply = [this](const std::string &text) { sendChatMessage(text); };
+    auto reply = [this, &msg](const std::string &text) {
+        sendChatMessage(text, msg.platform);
+    };
 
     if (msg.command == ChatCommand::Toggle) {
         std::string action = msg.args;
@@ -1082,7 +1144,7 @@ void Switcher::announceSceneChange(SwitchType type)
         return;
     }
 
-    sendChatMessage(formatTemplate(tmpl));
+    sendAnnouncement(formatTemplate(tmpl));
 }
 
 std::string Switcher::formatTemplate(const std::string &tmpl, const std::string &sceneOverride)
@@ -1125,7 +1187,7 @@ void Switcher::handleCustomCommands(const ChatMessage& msg)
         std::transform(triggerLower.begin(), triggerLower.end(), triggerLower.begin(), ::tolower);
         
         if (msgLower == triggerLower || msgLower.rfind(triggerLower + " ", 0) == 0) {
-            sendChatMessage(formatTemplate(cmd.response));
+            sendChatMessage(formatTemplate(cmd.response), msg.platform);
             return;
         }
     }

@@ -76,6 +76,13 @@ The status bar at the top of the dialog shows live bitrate, RTT, and the active 
 
 Works with **Twitch** and **Kick** chat. By default, only the broadcaster can use commands; add other allowed users on the Chat tab. Every command name can be renamed under the **Commands** tab.
 
+The Chat tab offers two backward-compatible connection modes:
+
+- **Twitch OAuth token + Kick read-only** keeps the original direct connection behavior and existing settings.
+- **Pair with IRLchat** uses a 6-digit code from the IRLchat dashboard to listen to Twitch and Kick simultaneously, send command replies to the originating platform, and announce on either or both platforms without storing provider OAuth tokens in the plugin.
+
+To pair, connect Twitch and/or Kick in the IRLchat dashboard, generate a pairing code, enter it on the BSS Chat tab, and click **Apply**. The resulting integration token is scoped to chat relay access and can be removed from the IRLchat dashboard at any time.
+
 | Command | What it does |
 |---------|--------------|
 | `!live` | Switch to your Live scene |
@@ -184,5 +191,5 @@ GPL-2.0
 ---
 
 <p align="center">
-  <sub>v1.0.8 | Powered by <a href="https://irlhosting.com"><b>IRL</b><span style="color: #22d3ee;">Hosting</span></a></sub>
+  <sub>v1.0.9 | Powered by <a href="https://irlhosting.com"><b>IRL</b><span style="color: #22d3ee;">Hosting</span></a></sub>
 </p>

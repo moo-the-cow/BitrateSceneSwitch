@@ -286,6 +286,7 @@ void ChatClient::handleMessage(const std::string& raw)
 ChatMessage ChatClient::parseMessage(const std::string& raw)
 {
     ChatMessage msg;
+    msg.platform = ChatPlatform::Twitch;
     
     size_t exclaim = raw.find('!');
     if (exclaim != std::string::npos) {

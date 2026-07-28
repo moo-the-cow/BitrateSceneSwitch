@@ -22,7 +22,7 @@ WsClient::~WsClient()
 	disconnect();
 }
 
-bool WsClient::connect(const std::string &url)
+bool WsClient::connect(const std::string &url, const std::string &header)
 {
 	disconnect();
 
@@ -84,6 +84,16 @@ bool WsClient::connect(const std::string &url)
 	if (!request) {
 		disconnect();
 		return false;
+	}
+
+	if (!header.empty()) {
+		std::wstring wheader = utf8ToWide(header);
+		if (!WinHttpAddRequestHeaders(request, wheader.c_str(), (DWORD)-1L,
+					   WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE)) {
+			WinHttpCloseHandle(request);
+			disconnect();
+			return false;
+		}
 	}
 
 	if (!WinHttpSetOption(request,
@@ -206,7 +216,7 @@ WsClient::~WsClient()
 	disconnect();
 }
 
-bool WsClient::connect(const std::string &url)
+bool WsClient::connect(const std::string &url, const std::string &header)
 {
 	disconnect();
 
@@ -223,13 +233,17 @@ bool WsClient::connect(const std::string &url)
 	curl_easy_setopt(curl_, CURLOPT_CONNECTTIMEOUT_MS, 5000L);
 	curl_easy_setopt(curl_, CURLOPT_TIMEOUT_MS, 10000L);
 
+	if (!header.empty()) {
+		headers_ = curl_slist_append(headers_, header.c_str());
+		curl_easy_setopt(curl_, CURLOPT_HTTPHEADER, headers_);
+	}
+
 	CURLcode res = curl_easy_perform(curl_);
 	if (res != CURLE_OK) {
 		blog(LOG_WARNING,
 		     "[BitrateSceneSwitch] WS connect failed: %s",
 		     curl_easy_strerror(res));
-		curl_easy_cleanup(curl_);
-		curl_ = nullptr;
+		disconnect();
 		return false;
 	}
 
@@ -245,6 +259,10 @@ void WsClient::disconnect()
 		curl_ws_send(curl_, "", 0, &sent, 0, CURLWS_CLOSE);
 		curl_easy_cleanup(curl_);
 		curl_ = nullptr;
+	}
+	if (headers_) {
+		curl_slist_free_all(headers_);
+		headers_ = nullptr;
 	}
 }
 

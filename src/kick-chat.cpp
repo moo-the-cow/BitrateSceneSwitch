@@ -139,6 +139,7 @@ void KickChatClient::handleChatJson(const std::string &dataJson)
 		return;
 
 	ChatMessage msg;
+	msg.platform = ChatPlatform::Kick;
 	msg.username = slug.toStdString();
 	msg.message = content.toStdString();
 	std::string args;

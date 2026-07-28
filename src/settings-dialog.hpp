@@ -41,6 +41,8 @@ private slots:
     void onSave();
     void onApply();
     void refreshStatus();
+    void pairIrlChat();
+    void disconnectIrlChat();
 
 private:
     void setupUI();
@@ -110,11 +112,14 @@ private:
 
     // Chat
     QCheckBox *chatEnabledCheckbox_;
+    QComboBox *chatConnectionModeCombo_;
     QComboBox *chatPlatformCombo_;
     QLineEdit *chatChannelEdit_;
     QLineEdit *chatBotUsernameEdit_;
     QLineEdit *chatOauthEdit_;
     QLineEdit *chatAdminsEdit_;
+    QLabel *directPlatformLabel_;
+    QLabel *directChannelLabel_;
     QLabel *twitchBotLabel_;
     QLabel *twitchOauthLabel_;
     QLabel *kickChannelLabel_;
@@ -123,6 +128,14 @@ private:
     QLineEdit *kickChatroomIdEdit_;
     QCheckBox *chatAutoStopRaidCheckbox_;
     QCheckBox *chatAnnounceRaidStopCheckbox_;
+    QWidget *irlChatGroup_;
+    QLineEdit *irlChatPairCodeEdit_;
+    QPushButton *irlChatPairButton_;
+    QPushButton *irlChatDisconnectButton_;
+    QLabel *irlChatStatusLabel_;
+    QCheckBox *irlChatAnnounceTwitchCheckbox_;
+    QCheckBox *irlChatAnnounceKickCheckbox_;
+    std::string irlChatToken_;
 
     // Messages
     QLineEdit *msgSwitchedLiveEdit_;
