@@ -23,7 +23,7 @@ UpdateChecker::~UpdateChecker()
     // tell any in-flight thread we're toast
     *alive_ = false;
     if (checkThread_.joinable())
-        checkThread_.detach();
+        checkThread_.join();
 }
 
 void UpdateChecker::checkForUpdates(UpdateCallback callback)
@@ -33,9 +33,9 @@ void UpdateChecker::checkForUpdates(UpdateCallback callback)
     checking_ = true;
 
     if (checkThread_.joinable())
-        checkThread_.detach();
+        checkThread_.join();
 
-    // grab a copy of the alive flag so the lambda can outlive us safely
+    // grab a copy so destruction can suppress callbacks before joining
     auto alive = alive_;
 
     checkThread_ = std::thread([this, callback, alive]() {

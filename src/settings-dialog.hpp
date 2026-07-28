@@ -115,7 +115,6 @@ private:
     QLineEdit *chatBotUsernameEdit_;
     QLineEdit *chatOauthEdit_;
     QLineEdit *chatAdminsEdit_;
-    QCheckBox *chatAnnounceCheckbox_;
     QLabel *twitchBotLabel_;
     QLabel *twitchOauthLabel_;
     QLabel *kickChannelLabel_;

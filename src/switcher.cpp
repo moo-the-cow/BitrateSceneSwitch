@@ -3,6 +3,7 @@
 #include <obs-frontend-api.h>
 #include <util/platform.h>
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <thread>
 #include <vector>
@@ -47,6 +48,7 @@ void Switcher::start()
     if (running_)
         return;
 
+    g_pluginAlive = true;
     running_ = true;
     switcherThread_ = std::thread(&Switcher::switcherThread, this);
     blog(LOG_INFO, "[BitrateSceneSwitch] Switcher started");
@@ -878,12 +880,14 @@ void Switcher::sendChatMessage(const std::string &text)
 
 void Switcher::handleRaidStop(const std::string &targetLogin, const std::string &displayName)
 {
+    bool enabled = false;
     bool autoStop = false;
     bool announce = false;
     ChatPlatform plat = ChatPlatform::Twitch;
     std::string tmpl;
 
     config_->lockRead();
+    enabled = config_->enabled;
     autoStop = config_->chat.autoStopStreamOnRaid;
     announce = config_->chat.announceRaidStop;
     plat = config_->chat.platform;
@@ -894,7 +898,7 @@ void Switcher::handleRaidStop(const std::string &targetLogin, const std::string 
          "[BitrateSceneSwitch] Raid event received: target=%s display=%s",
          targetLogin.c_str(), displayName.c_str());
 
-    if (!autoStop) {
+    if (!enabled || !autoStop) {
         blog(LOG_INFO, "[BitrateSceneSwitch] Raid stop disabled, ignoring");
         return;
     }
@@ -913,11 +917,10 @@ void Switcher::handleRaidStop(const std::string &targetLogin, const std::string 
     if (announce && plat == ChatPlatform::Twitch) {
         std::string msg = tmpl;
         const std::string &sub = !targetLogin.empty() ? targetLogin : displayName;
-        for (;;) {
-            size_t pos = msg.find("{target}");
-            if (pos == std::string::npos)
-                break;
+        size_t pos = 0;
+        while ((pos = msg.find("{target}", pos)) != std::string::npos) {
             msg.replace(pos, 8, sub);
+            pos += sub.length();
         }
         sendChatMessage(msg);
     }
@@ -933,8 +936,43 @@ void Switcher::handleChatCommand(const ChatMessage& msg)
          msg.username.c_str(), msg.message.c_str());
 
     auto reply = [this](const std::string &text) { sendChatMessage(text); };
+
+    if (msg.command == ChatCommand::Toggle) {
+        std::string action = msg.args;
+        size_t first = action.find_first_not_of(" \t\r\n");
+        size_t last = action.find_last_not_of(" \t\r\n");
+        action = first == std::string::npos ? "" : action.substr(first, last - first + 1);
+        std::transform(action.begin(), action.end(), action.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        if (action == "on" || action == "off") {
+            bool enabled = action == "on";
+            config_->lockWrite();
+            config_->enabled = enabled;
+            config_->unlockWrite();
+            reply(enabled ? "Bitrate Scene Switch enabled" : "Bitrate Scene Switch disabled");
+            blog(LOG_INFO, "[BitrateSceneSwitch] %s via chat", enabled ? "Enabled" : "Disabled");
+            obs_frontend_save();
+        } else {
+            config_->lockRead();
+            bool enabled = config_->enabled;
+            config_->unlockRead();
+            reply(std::string("Bitrate Scene Switch is ") + (enabled ? "enabled" : "disabled") +
+                  ". Usage: !bss on|off");
+        }
+        return;
+    }
+
+    config_->lockRead();
+    bool enabled = config_->enabled;
+    config_->unlockRead();
+    if (!enabled) {
+        blog(LOG_INFO, "[BitrateSceneSwitch] Ignoring chat command while disabled");
+        return;
+    }
+
     auto announce = [this, &reply](const std::string &text) {
-        if (config_->chat.announceSceneChanges)
+        if (config_->autoNotify)
             reply(text);
     };
 
@@ -1018,6 +1056,7 @@ void Switcher::handleChatCommand(const ChatMessage& msg)
     case ChatCommand::None:
         handleCustomCommands(msg);
         break;
+    case ChatCommand::Toggle:
     default:
         break;
     }
@@ -1025,7 +1064,7 @@ void Switcher::handleChatCommand(const ChatMessage& msg)
 
 void Switcher::announceSceneChange(SwitchType type)
 {
-    if (!config_->chat.announceSceneChanges)
+    if (!config_->autoNotify)
         return;
 
     std::string tmpl;

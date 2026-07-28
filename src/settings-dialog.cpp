@@ -510,6 +510,7 @@ QWidget *SettingsDialog::createGeneralPage()
     onlyWhenStreamingCheckbox_ = new QCheckBox("Only switch when streaming", page);
     instantRecoverCheckbox_ = new QCheckBox("Instantly switch on bitrate recovery", page);
     autoNotifyCheckbox_ = new QCheckBox("Enable auto-switch notifications", page);
+    autoNotifyCheckbox_->setToolTip("Announce automatic scene switches in chat (Twitch only)");
 
     retryAttemptsSpinBox_ = new QSpinBox(page);
     retryAttemptsSpinBox_->setRange(1, 30);
@@ -723,12 +724,10 @@ QWidget *SettingsDialog::createChatPage()
 
     chatAdminsEdit_ = new QLineEdit(page);
     chatAdminsEdit_->setPlaceholderText("user1, user2 (empty = channel owner only)");
-    chatAnnounceCheckbox_ = new QCheckBox("Announce scene changes in chat", page);
     chatAutoStopRaidCheckbox_ = new QCheckBox("Stop stream when raiding / hosting out", page);
     chatAnnounceRaidStopCheckbox_ = new QCheckBox("Announce raid stop in chat (Twitch only)", page);
 
     permForm->addRow("Allowed Users:", chatAdminsEdit_);
-    permForm->addRow(chatAnnounceCheckbox_);
     permForm->addRow(chatAutoStopRaidCheckbox_);
     permForm->addRow(chatAnnounceRaidStopCheckbox_);
     layout->addWidget(permGroup);
@@ -998,7 +997,6 @@ void SettingsDialog::loadSettings()
     chatChannelEdit_->setText(QString::fromStdString(config_->chat.channel));
     chatBotUsernameEdit_->setText(QString::fromStdString(config_->chat.botUsername));
     chatOauthEdit_->setText(QString::fromStdString(config_->chat.oauthToken));
-    chatAnnounceCheckbox_->setChecked(config_->chat.announceSceneChanges);
     kickChannelIdEdit_->setText(QString::number(config_->chat.kickChannelId));
     kickChatroomIdEdit_->setText(QString::number(config_->chat.kickChatroomId));
     chatAutoStopRaidCheckbox_->setChecked(config_->chat.autoStopStreamOnRaid);
@@ -1103,7 +1101,6 @@ void SettingsDialog::saveSettings()
     config_->chat.channel = chatChannelEdit_->text().toStdString();
     config_->chat.botUsername = chatBotUsernameEdit_->text().toStdString();
     config_->chat.oauthToken = chatOauthEdit_->text().toStdString();
-    config_->chat.announceSceneChanges = chatAnnounceCheckbox_->isChecked();
     config_->chat.kickChannelId = kickChannelIdEdit_->text().trimmed().toULongLong();
     config_->chat.kickChatroomId = kickChatroomIdEdit_->text().trimmed().toULongLong();
     config_->chat.autoStopStreamOnRaid = chatAutoStopRaidCheckbox_->isChecked();

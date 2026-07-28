@@ -3,6 +3,8 @@
 
 namespace BitrateSwitch {
 
+static constexpr size_t kMaxResponseBytes = 8 * 1024 * 1024;
+
 HttpClient::HttpClient()
 {
 }
@@ -14,7 +16,11 @@ HttpClient::~HttpClient()
 size_t HttpClient::writeCallback(char *ptr, size_t size, size_t nmemb, void *userdata)
 {
     std::string *response = static_cast<std::string *>(userdata);
+    if (size != 0 && nmemb > kMaxResponseBytes / size)
+        return 0;
     size_t totalSize = size * nmemb;
+    if (totalSize > kMaxResponseBytes - response->size())
+        return 0;
     response->append(ptr, totalSize);
     return totalSize;
 }
@@ -36,7 +42,8 @@ HttpResponse HttpClient::get(const std::string &url, int timeoutMs)
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, timeoutMs / 2);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "BitrateSceneSwitch/1.0");
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
 
     CURLcode res = curl_easy_perform(curl);
     
@@ -73,7 +80,8 @@ HttpResponse HttpClient::get(const std::string &url, const std::string &authHead
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, timeoutMs / 2);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "BitrateSceneSwitch/1.0");
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
 
     CURLcode res = curl_easy_perform(curl);
     
@@ -113,7 +121,8 @@ HttpResponse HttpClient::post(const std::string &url, const std::string &body,
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, timeoutMs / 2);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "BitrateSceneSwitch/1.0");
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
 
     CURLcode res = curl_easy_perform(curl);
     

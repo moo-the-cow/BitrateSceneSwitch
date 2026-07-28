@@ -87,6 +87,7 @@ Works with **Twitch** and **Kick** chat. By default, only the broadcaster can us
 | `!refresh` | Re-trigger the current scene (clears stuck sources) |
 | `!fix` | Refresh media sources (RTMP, SRT, RIST, etc.) |
 | `!status` | Reply with current bitrate, RTT, and scene |
+| `!bss on` / `!bss off` | Enable or disable the plugin while keeping chat connected |
 | `!trigger` | Force a switch check immediately |
 | `!start` | Start streaming |
 | `!stop`  | Stop streaming |

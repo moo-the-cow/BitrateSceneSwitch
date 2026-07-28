@@ -3,7 +3,6 @@
 #include <obs-module.h>
 #include <obs-frontend-api.h>
 
-#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 
@@ -75,22 +74,11 @@ static void queueRaid(KickChatClient::RaidCallback cb, std::string slug,
 }
 
 static bool kickCanUseCommands(const ChatConfig &cfg,
-			       const QString &senderSlug,
-			       const QJsonArray &badges)
+			       const QString &senderSlug)
 {
 	QString ch = QString::fromStdString(cfg.channel);
 	if (senderSlug.compare(ch, Qt::CaseInsensitive) == 0)
 		return true;
-	for (const QJsonValue &v : badges) {
-		if (!v.isObject())
-			continue;
-		QString k = v.toObject()
-				    .value(QLatin1String("type"))
-				    .toString();
-		if (k == QLatin1String("moderator") ||
-		    k == QLatin1String("broadcaster"))
-			return true;
-	}
 	QString sl = senderSlug.toLower();
 	for (const auto &a : cfg.admins) {
 		if (sl == QString::fromStdString(a).toLower())
@@ -145,12 +133,7 @@ void KickChatClient::handleChatJson(const std::string &dataJson)
 	QString content = root.value(QLatin1String("content")).toString();
 	QJsonObject sender = root.value(QLatin1String("sender")).toObject();
 	QString slug = sender.value(QLatin1String("slug")).toString();
-	QJsonArray badges =
-		sender.value(QLatin1String("identity"))
-			.toObject()
-			.value(QLatin1String("badges"))
-			.toArray();
-	if (!kickCanUseCommands(config_, slug, badges))
+	if (!kickCanUseCommands(config_, slug))
 		return;
 	if (content.isEmpty() || !content.startsWith(QLatin1Char('!')))
 		return;
@@ -162,9 +145,6 @@ void KickChatClient::handleChatJson(const std::string &dataJson)
 	msg.command =
 		ChatClient::parseCommandForConfig(config_, msg.message, args);
 	msg.args = std::move(args);
-
-	if (msg.command == ChatCommand::None)
-		return;
 	queueChatCommand(cmdCb_, std::move(msg));
 }
 

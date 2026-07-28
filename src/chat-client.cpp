@@ -330,6 +330,7 @@ ChatCommand ChatClient::parseCommandForConfig(const ChatConfig &cfg, const std::
         return false;
     };
     
+    if (checkCmd("!bss", ChatCommand::Toggle)) return ChatCommand::Toggle;
     if (checkCmd(cfg.cmdLive, ChatCommand::Live)) return ChatCommand::Live;
     if (checkCmd(cfg.cmdLow, ChatCommand::Low)) return ChatCommand::Low;
     if (checkCmd(cfg.cmdBrb, ChatCommand::Brb)) return ChatCommand::Brb;

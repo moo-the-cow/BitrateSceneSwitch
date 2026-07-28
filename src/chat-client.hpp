@@ -38,7 +38,8 @@ enum class ChatCommand {
     Fix,
     SwitchScene,
     Start,
-    Stop
+    Stop,
+    Toggle
 };
 
 struct ChatMessage {

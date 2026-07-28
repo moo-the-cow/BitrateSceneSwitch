@@ -16,6 +16,10 @@ find_package(obs-frontend-api REQUIRED)
 
 # Find Qt6
 find_package(Qt6 REQUIRED COMPONENTS Widgets Core)
+if(APPLE AND TARGET WrapOpenGL::WrapOpenGL)
+    set_property(TARGET WrapOpenGL::WrapOpenGL PROPERTY
+        INTERFACE_LINK_LIBRARIES OpenGL::GL)
+endif()
 
 # Find CURL
 find_package(CURL REQUIRED)

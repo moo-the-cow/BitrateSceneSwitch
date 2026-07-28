@@ -120,7 +120,6 @@ struct ChatConfig {
     std::string botUsername;                  // Bot username for login
     std::string oauthToken;                   // Twitch: oauth:...  (unused for Kick read-only)
     std::vector<std::string> admins;          // Users allowed to use commands
-    bool announceSceneChanges = true;         // Twitch: announce in chat (Kick cannot send)
 
     // Kick: numeric ids (channel page / network tools)
     uint64_t kickChannelId = 0;
