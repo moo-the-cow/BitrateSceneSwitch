@@ -372,7 +372,7 @@ void Switcher::handleRistStaleFrameFix(bool offline)
     if (config_->options.ristStaleFrameFixSec == 0)
         return;
 
-    // If we're online, reset the state and mark that we've been online
+    // Reset state when online
     if (!offline) {
         hasBeenOnline_ = true;
         ristFixPending_ = false;
@@ -389,49 +389,107 @@ void Switcher::handleRistStaleFrameFix(bool offline)
         ristFixTriggerTime_ = std::chrono::steady_clock::now();
         blog(LOG_INFO, "[BitrateSceneSwitch] RIST stale frame fix: offline detected, will refresh in %u sec if still offline",
              config_->options.ristStaleFrameFixSec);
-    } else {
-        auto elapsed = std::chrono::steady_clock::now() - ristFixTriggerTime_;
-        auto delaySec = std::chrono::seconds(config_->options.ristStaleFrameFixSec);
-        if (elapsed >= delaySec) {
-            blog(LOG_INFO, "[BitrateSceneSwitch] RIST stale frame fix: refreshing media sources after %u sec offline",
-                 config_->options.ristStaleFrameFixSec);
-            obs_queue_task(
-                OBS_TASK_UI,
-                [](void *) {
-                    obs_enum_sources(
-                        [](void *, obs_source_t *source) -> bool {
-                            const char *sourceId = obs_source_get_id(source);
-                            if (!sourceId)
-                                return true;
-                            if (strcmp(sourceId, "ffmpeg_source") != 0 &&
-                                strcmp(sourceId, "vlc_source") != 0)
-                                return true;
-
-                            obs_data_t *settings = obs_source_get_settings(source);
-                            if (!settings)
-                                return true;
-                            const char *input = obs_data_get_string(settings, "input");
-                            bool isRist = input && *input &&
-                                          (strncmp(input, "rist", 4) == 0 ||
-                                           strncmp(input, "RIST", 4) == 0);
-                            obs_data_release(settings);
-
-                            if (isRist) {
-                                obs_source_media_restart(source);
-                                blog(LOG_INFO,
-                                     "[BitrateSceneSwitch] RIST fix: restarted %s",
-                                     obs_source_get_name(source));
-                            }
-                            return true;
-                        },
-                        nullptr);
-                },
-                nullptr, false);
-            ristFixPending_ = false;
-            ristFixFired_ = true;
-            blog(LOG_INFO, "[BitrateSceneSwitch] RIST stale frame fix completed");
-        }
+        return;
     }
+
+    auto elapsed = std::chrono::steady_clock::now() - ristFixTriggerTime_;
+    auto delaySec = std::chrono::seconds(config_->options.ristStaleFrameFixSec);
+    if (elapsed < delaySec)
+        return;
+
+    // --- Execute the RIST fix ---
+    blog(LOG_INFO, "[BitrateSceneSwitch] RIST stale frame fix: Executing media source refresh.");
+
+    obs_queue_task(OBS_TASK_UI, [](void *param) {
+        // Enumerate all sources to find RIST sources
+        obs_enum_sources([](void *data, obs_source_t *source) -> bool {
+            if (!source) return true;
+
+            // Check if it's a media source that could have RIST
+            const char *id = obs_source_get_id(source);
+            if (!id) return true;
+            
+            std::string idStr(id);
+            if (idStr != "ffmpeg_source" && idStr != "vlc_source" && 
+                idStr != "media_source" && idStr != "decklink_input") {
+                return true;
+            }
+
+            // Check if it's configured with a RIST URL
+            bool isRist = false;
+            obs_data_t *settings = obs_source_get_settings(source);
+            if (settings) {
+                // Check multiple possible setting names
+                const char *input = obs_data_get_string(settings, "input");
+                const char *url = obs_data_get_string(settings, "url");
+                const char *local_file = obs_data_get_string(settings, "local_file");
+                
+                if (input && *input) {
+                    std::string inputStr = input;
+                    std::transform(inputStr.begin(), inputStr.end(), inputStr.begin(), ::tolower);
+                    if (inputStr.rfind("rist", 0) == 0) {
+                        isRist = true;
+                    }
+                }
+                
+                if (!isRist && url && *url) {
+                    std::string urlStr = url;
+                    std::transform(urlStr.begin(), urlStr.end(), urlStr.begin(), ::tolower);
+                    if (urlStr.rfind("rist", 0) == 0) {
+                        isRist = true;
+                    }
+                }
+                
+                // Also check if RIST appears anywhere in settings
+                if (!isRist) {
+                    obs_data_item_t *item = obs_data_first(settings);
+                    while (item && !isRist) {
+                        const char *key = obs_data_item_get_name(item);
+                        if (key) {
+                            const char *value = obs_data_get_string(settings, key);
+                            if (value && *value) {
+                                std::string valueStr = value;
+                                std::transform(valueStr.begin(), valueStr.end(), 
+                                             valueStr.begin(), ::tolower);
+                                if (valueStr.find("rist") != std::string::npos) {
+                                    isRist = true;
+                                }
+                            }
+                        }
+                        obs_data_item_next(&item);
+                    }
+                }
+                
+                obs_data_release(settings);
+            }
+            
+            if (!isRist) return true;
+
+            const char *sourceName = obs_source_get_name(source);
+            blog(LOG_INFO, "[BitrateSceneSwitch] RIST fix: Found RIST source: '%s' (ID: %s)", 
+                 sourceName ? sourceName : "unknown", id);
+
+            // THE WORKAROUND: Deactivate and reactivate the source
+            // This forces the source to tear down and re-initialize,
+            // bypassing the internal "restart guard" bug in OBS.
+            obs_source_set_active(source, false);
+            // Small delay to allow deactivation to complete
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            obs_source_set_active(source, true);
+
+            // Also call the standard restart for good measure
+            obs_source_media_restart(source);
+
+            blog(LOG_INFO, "[BitrateSceneSwitch] RIST fix: Restarted source '%s'", 
+                 sourceName ? sourceName : "unknown");
+
+            return true;
+        }, nullptr);
+    }, nullptr, false);
+
+    ristFixPending_ = false;
+    ristFixFired_ = true;
+    blog(LOG_INFO, "[BitrateSceneSwitch] RIST stale frame fix completed");
 }
 
 void Switcher::handleOfflineTimeout()
