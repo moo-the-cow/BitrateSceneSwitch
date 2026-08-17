@@ -162,10 +162,9 @@ jobs:
           Write-Host "SIMDe Dir: $simdeDir"
           Write-Host "OBS Build Dir: $obsBuildDir"
           
-          # Add the build directory to CMAKE_PREFIX_PATH so CMake can find the config files
           cmake -B build -S . -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_PREFIX_PATH="$env:Qt6_DIR;$depsDir;$obsBuildDir;$obsBuildDir/UI;$simdeDir/lib/cmake/SIMDe" `
+            -DCMAKE_PREFIX_PATH="$env:Qt6_DIR;$depsDir;$obsBuildDir;$obsBuildDir/UI;$obsBuildDir/deps/w32-pthreads;$simdeDir/lib/cmake/SIMDe" `
             -DCURL_INCLUDE_DIR="$curlIncludePath" `
             -DCURL_LIBRARY="$curlLibPath"
             
