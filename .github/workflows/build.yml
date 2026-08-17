@@ -12,7 +12,7 @@ env:
   PLUGIN_NAME: BitrateSceneSwitch
 
 jobs:
-    build-windows-x64:
+  build-windows-x64:
     name: Build for Windows x64
     runs-on: windows-2022
     steps:
