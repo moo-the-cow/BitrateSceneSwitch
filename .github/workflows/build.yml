@@ -30,20 +30,6 @@ jobs:
           version: '6.7.2'
           arch: 'win64_msvc2019_64'
           cache: true
-
-      # ---------- ADD SIMDe ----------
-      - name: Cache SIMDe
-        id: cache-simde
-        uses: actions/cache@v4
-        with:
-          path: simde
-          key: simde-x64-v1
-          
-      - name: Download SIMDe
-        if: steps.cache-simde.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          git clone --depth 1 https://github.com/simd-everywhere/simde.git simde
           
       # ---------- OBS Source ----------
       - name: Cache OBS Studio source
@@ -51,7 +37,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: obs-studio
-          key: obs-studio-official-x64-32.2.1-v2
+          key: obs-studio-official-x64-32.2.1-v3
           
       - name: Clone OBS Studio (official)
         if: steps.cache-obs.outputs.cache-hit != 'true'
@@ -68,7 +54,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: obs-deps
-          key: obs-deps-2026-07-15-x64-v2
+          key: obs-deps-2026-07-15-x64-v3
           
       - name: Download OBS deps
         if: steps.cache-deps.outputs.cache-hit != 'true'
@@ -84,7 +70,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: curl
-          key: curl-latest-x64-v2
+          key: curl-latest-x64-v3
           
       - name: Download CURL for x64
         if: steps.cache-curl.outputs.cache-hit != 'true'
@@ -93,23 +79,17 @@ jobs:
           Invoke-WebRequest -Uri "https://curl.se/windows/latest.cgi?p=win64-mingw.zip" -OutFile curl.zip
           Expand-Archive curl.zip -DestinationPath curl-temp
           
-          # Find the extracted folder (it's usually something like curl-8.x.x-win64-mingw)
           $extractedFolder = Get-ChildItem -Path curl-temp -Directory | Select-Object -First 1
           
-          # Create the curl directory structure
           New-Item -ItemType Directory -Force -Path curl/bin
           New-Item -ItemType Directory -Force -Path curl/include
           New-Item -ItemType Directory -Force -Path curl/lib
           
-          # Copy files to the expected structure
           Copy-Item "$($extractedFolder.FullName)/bin/*" curl/bin/ -Recurse -ErrorAction SilentlyContinue
           Copy-Item "$($extractedFolder.FullName)/include/*" curl/include/ -Recurse -ErrorAction SilentlyContinue
           Copy-Item "$($extractedFolder.FullName)/lib/*" curl/lib/ -Recurse -ErrorAction SilentlyContinue
-          
-          # Also copy files from root if they exist
           Copy-Item "$($extractedFolder.FullName)/*.dll" curl/bin/ -ErrorAction SilentlyContinue
           
-          # Cleanup
           Remove-Item curl-temp -Recurse -Force
           
       # ---------- OBS Build ----------
@@ -118,7 +98,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: obs-studio/build_x64
-          key: obs-build-official-x64-32.2.1-v2
+          key: obs-build-official-x64-32.2.1-v3
           
       - name: Build OBS Libraries (x64)
         if: steps.cache-obs-build.outputs.cache-hit != 'true'
@@ -127,7 +107,6 @@ jobs:
           cd obs-studio
           cmake -B build_x64 -S . -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
-            -DSIMDe_DIR="${{ github.workspace }}/simde" `
             -DENABLE_BROWSER=OFF `
             -DENABLE_SCRIPTING=OFF `
             -DENABLE_UI=ON `
@@ -143,7 +122,7 @@ jobs:
         run: |
           $obsDir = "${{ github.workspace }}/obs-studio"
           $curlDir = "${{ github.workspace }}/curl"
-          $simdeDir = "${{ github.workspace }}/simde"
+          $depsDir = "${{ github.workspace }}/obs-deps"
           $obsBuildDir = "$obsDir/build_x64"
           
           # Find curl library
@@ -168,15 +147,14 @@ jobs:
           
           Write-Host "CURL Library: $curlLibPath"
           Write-Host "CURL Include: $curlIncludePath"
-          Write-Host "SIMDe Dir: $simdeDir"
+          Write-Host "Deps Dir: $depsDir"
           
           cmake -B build -S . -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_PREFIX_PATH="$env:Qt6_DIR;${{ github.workspace }}/obs-deps;$obsBuildDir" `
+            -DCMAKE_PREFIX_PATH="$env:Qt6_DIR;$depsDir;$obsBuildDir" `
             -Dlibobs_DIR="$obsBuildDir/libobs" `
             -Dobs-frontend-api_DIR="$obsBuildDir/UI/obs-frontend-api" `
             -Dw32-pthreads_DIR="$obsBuildDir/deps/w32-pthreads" `
-            -DSIMDe_DIR="$simdeDir" `
             -DCURL_INCLUDE_DIR="$curlIncludePath" `
             -DCURL_LIBRARY="$curlLibPath"
             
@@ -188,10 +166,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path "release/obs-plugins/64bit", "release/data/obs-plugins/${{ env.PLUGIN_NAME }}"
           
-          # Copy plugin DLL
           Copy-Item "build/Release/${{ env.PLUGIN_NAME }}.dll" "release/obs-plugins/64bit/"
           
-          # Find and copy curl DLL (multiple possible locations)
           $curlDll = Get-ChildItem -Path curl -Filter "*.dll" -Recurse | Where-Object { 
             $_.Name -match "libcurl" -and $_.Directory.Name -match "bin" 
           } | Select-Object -First 1
@@ -207,12 +183,10 @@ jobs:
             Write-Host "Warning: curl DLL not found"
           }
           
-          # Copy data files
           if (Test-Path "data") { 
             Copy-Item -Recurse "data/*" "release/data/obs-plugins/${{ env.PLUGIN_NAME }}/" 
           }
           
-          # List packaged files for verification
           Write-Host "Packaged files:"
           Get-ChildItem release -Recurse | ForEach-Object { Write-Host $_.FullName }
           
