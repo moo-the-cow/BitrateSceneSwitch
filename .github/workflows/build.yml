@@ -31,13 +31,12 @@ jobs:
           arch: 'win64_msvc2019_64'
           cache: true
           
-      # ---------- OBS Source ----------
       - name: Cache OBS Studio source
         id: cache-obs
         uses: actions/cache@v4
         with:
           path: obs-studio
-          key: obs-studio-official-x64-32.2.1-v3
+          key: obs-studio-official-x64-32.2.1-v4
           
       - name: Clone OBS Studio (official)
         if: steps.cache-obs.outputs.cache-hit != 'true'
@@ -48,13 +47,12 @@ jobs:
           git submodule update --init --recursive --depth 1
           cd ..
           
-      # ---------- OBS Deps ----------
       - name: Cache OBS deps
         id: cache-deps
         uses: actions/cache@v4
         with:
           path: obs-deps
-          key: obs-deps-2026-07-15-x64-v3
+          key: obs-deps-2026-07-15-x64-v4
           
       - name: Download OBS deps
         if: steps.cache-deps.outputs.cache-hit != 'true'
@@ -64,13 +62,12 @@ jobs:
           Invoke-WebRequest -Uri $depsUrl -OutFile deps.zip
           Expand-Archive deps.zip -DestinationPath obs-deps
           
-      # ---------- CURL ----------
       - name: Cache CURL
         id: cache-curl
         uses: actions/cache@v4
         with:
           path: curl
-          key: curl-latest-x64-v3
+          key: curl-latest-x64-v4
           
       - name: Download CURL for x64
         if: steps.cache-curl.outputs.cache-hit != 'true'
@@ -92,13 +89,12 @@ jobs:
           
           Remove-Item curl-temp -Recurse -Force
           
-      # ---------- OBS Build ----------
       - name: Cache OBS build
         id: cache-obs-build
         uses: actions/cache@v4
         with:
           path: obs-studio/build_x64
-          key: obs-build-official-x64-32.2.1-v3
+          key: obs-build-official-x64-32.2.1-v4
           
       - name: Build OBS Libraries (x64)
         if: steps.cache-obs-build.outputs.cache-hit != 'true'
@@ -116,7 +112,6 @@ jobs:
           cmake --build build_x64 --config Release --target libobs obs-frontend-api -- /m
           cd ..
           
-      # ---------- Configure Plugin ----------
       - name: Configure Plugin (x64)
         shell: pwsh
         run: |
@@ -155,6 +150,7 @@ jobs:
             -Dlibobs_DIR="$obsBuildDir/libobs" `
             -Dobs-frontend-api_DIR="$obsBuildDir/UI/obs-frontend-api" `
             -Dw32-pthreads_DIR="$obsBuildDir/deps/w32-pthreads" `
+            -DSIMDe_DIR="$depsDir/lib/cmake/SIMDe" `
             -DCURL_INCLUDE_DIR="$curlIncludePath" `
             -DCURL_LIBRARY="$curlLibPath"
             
