@@ -46,7 +46,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: obs-studio
-          key: obs-studio-official-x64-32.2.1-v9
+          key: obs-studio-official-x64-32.2.1-v10
           
       - name: Clone OBS Studio (official)
         if: steps.cache-obs.outputs.cache-hit != 'true'
@@ -62,7 +62,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: obs-deps
-          key: obs-deps-2026-07-15-x64-v9
+          key: obs-deps-2026-07-15-x64-v10
           
       - name: Download OBS deps
         if: steps.cache-deps.outputs.cache-hit != 'true'
@@ -77,7 +77,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: curl
-          key: curl-latest-x64-v9
+          key: curl-latest-x64-v10
           
       - name: Download CURL for x64
         if: steps.cache-curl.outputs.cache-hit != 'true'
@@ -104,7 +104,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: obs-studio/build_x64
-          key: obs-build-official-x64-32.2.1-v9
+          key: obs-build-official-x64-32.2.1-v10
           
       - name: Build OBS Libraries (x64)
         if: steps.cache-obs-build.outputs.cache-hit != 'true'
@@ -121,11 +121,29 @@ jobs:
             -DENABLE_VIRTUALCAM=OFF `
             -DCMAKE_PREFIX_PATH="${{ github.workspace }}/obs-deps"
           
-          # Build the full obs-frontend-api target which includes config generation
-          cmake --build build_x64 --config Release --target obs-frontend-api
-          # Also build libobs which is needed
-          cmake --build build_x64 --config Release --target libobs
+          # Build the full project so all config files are generated
+          cmake --build build_x64 --config Release --target ALL_BUILD
           cd ..
+          
+      - name: Debug OBS Build Output
+        shell: pwsh
+        run: |
+          Write-Host "=== Looking for obs-frontend-api config files ==="
+          Get-ChildItem -Path "obs-studio/build_x64" -Recurse -Filter "*frontend*Config.cmake" | ForEach-Object { 
+            Write-Host $_.FullName 
+          }
+          
+          Write-Host "=== Looking for libobs config files ==="
+          Get-ChildItem -Path "obs-studio/build_x64" -Recurse -Filter "*libobs*Config.cmake" | ForEach-Object { 
+            Write-Host $_.FullName 
+          }
+          
+          Write-Host "=== Contents of UI directory ==="
+          if (Test-Path "obs-studio/build_x64/UI") {
+            Get-ChildItem -Path "obs-studio/build_x64/UI" -Recurse | ForEach-Object { Write-Host $_.FullName }
+          } else {
+            Write-Host "UI directory not found!"
+          }
           
       - name: Configure Plugin (x64)
         shell: pwsh
@@ -162,9 +180,27 @@ jobs:
           Write-Host "SIMDe Dir: $simdeDir"
           Write-Host "OBS Build Dir: $obsBuildDir"
           
+          # Search for obs-frontend-api config file
+          $frontendConfig = Get-ChildItem -Path $obsBuildDir -Recurse -Filter "obs-frontend-apiConfig.cmake" | Select-Object -First 1
+          if ($frontendConfig) {
+            $frontendDir = $frontendConfig.DirectoryName
+            Write-Host "Found obs-frontend-api config at: $frontendDir"
+          } else {
+            Write-Host "WARNING: obs-frontend-apiConfig.cmake not found!"
+            # Try to find any frontend-related config
+            $frontendConfig = Get-ChildItem -Path $obsBuildDir -Recurse -Filter "*frontend*Config.cmake" | Select-Object -First 1
+            if ($frontendConfig) {
+              $frontendDir = $frontendConfig.DirectoryName
+              Write-Host "Found alternative frontend config at: $frontendDir"
+            } else {
+              Write-Host "ERROR: No frontend config found!"
+              $frontendDir = "$obsBuildDir/UI"
+            }
+          }
+          
           cmake -B build -S . -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_PREFIX_PATH="$env:Qt6_DIR;$depsDir;$obsBuildDir;$obsBuildDir/UI;$obsBuildDir/deps/w32-pthreads;$simdeDir/lib/cmake/SIMDe" `
+            -DCMAKE_PREFIX_PATH="$env:Qt6_DIR;$depsDir;$obsBuildDir;$frontendDir;$obsBuildDir/deps/w32-pthreads;$simdeDir/lib/cmake/SIMDe" `
             -DCURL_INCLUDE_DIR="$curlIncludePath" `
             -DCURL_LIBRARY="$curlLibPath"
             
@@ -210,7 +246,6 @@ jobs:
       - name: Upload Artifacts (x64)
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.PLUGIN_NAME }}-windows-x64
           path: release/
           
       - name: Upload Installer
