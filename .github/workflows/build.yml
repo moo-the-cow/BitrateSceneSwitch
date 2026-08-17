@@ -174,33 +174,27 @@ jobs:
             $curlIncludePath = $curlInclude.FullName
           }
           
-          Write-Host "CURL Library: $curlLibPath"
-          Write-Host "CURL Include: $curlIncludePath"
-          Write-Host "Deps Dir: $depsDir"
-          Write-Host "SIMDe Dir: $simdeDir"
-          Write-Host "OBS Build Dir: $obsBuildDir"
-          
-          # Search for obs-frontend-api config file
+          # Find obs-frontend-api config
           $frontendConfig = Get-ChildItem -Path $obsBuildDir -Recurse -Filter "obs-frontend-apiConfig.cmake" | Select-Object -First 1
           if ($frontendConfig) {
             $frontendDir = $frontendConfig.DirectoryName
             Write-Host "Found obs-frontend-api config at: $frontendDir"
           } else {
             Write-Host "WARNING: obs-frontend-apiConfig.cmake not found!"
-            # Try to find any frontend-related config
-            $frontendConfig = Get-ChildItem -Path $obsBuildDir -Recurse -Filter "*frontend*Config.cmake" | Select-Object -First 1
-            if ($frontendConfig) {
-              $frontendDir = $frontendConfig.DirectoryName
-              Write-Host "Found alternative frontend config at: $frontendDir"
-            } else {
-              Write-Host "ERROR: No frontend config found!"
-              $frontendDir = "$obsBuildDir/UI"
-            }
+            $frontendDir = "$obsBuildDir/frontend/api"
           }
+          
+          Write-Host "CURL Library: $curlLibPath"
+          Write-Host "CURL Include: $curlIncludePath"
+          Write-Host "Deps Dir: $depsDir"
+          Write-Host "SIMDe Dir: $simdeDir"
+          Write-Host "OBS Build Dir: $obsBuildDir"
+          Write-Host "Frontend Dir: $frontendDir"
           
           cmake -B build -S . -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_PREFIX_PATH="$env:Qt6_DIR;$depsDir;$obsBuildDir;$frontendDir;$obsBuildDir/deps/w32-pthreads;$simdeDir/lib/cmake/SIMDe" `
+            -DSIMDe_DIR="$simdeDir/lib/cmake/SIMDe" `
             -DCURL_INCLUDE_DIR="$curlIncludePath" `
             -DCURL_LIBRARY="$curlLibPath"
             
