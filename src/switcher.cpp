@@ -372,7 +372,7 @@ void Switcher::handleRistStaleFrameFix(bool offline)
     if (config_->options.ristStaleFrameFixSec == 0)
         return;
 
-    // Update hasBeenOnline_ based on current state
+    // If we're online, reset the state and mark that we've been online
     if (!offline) {
         hasBeenOnline_ = true;
         ristFixPending_ = false;
@@ -380,13 +380,15 @@ void Switcher::handleRistStaleFrameFix(bool offline)
         return;
     }
 
-    // We're offline - only proceed if we've been online before
-    if (!hasBeenOnline_ || ristFixFired_)
+    // We're offline - only proceed if we haven't fired the fix yet
+    if (ristFixFired_)
         return;
 
     if (!ristFixPending_) {
         ristFixPending_ = true;
         ristFixTriggerTime_ = std::chrono::steady_clock::now();
+        blog(LOG_INFO, "[BitrateSceneSwitch] RIST stale frame fix: offline detected, will refresh in %u sec if still offline",
+             config_->options.ristStaleFrameFixSec);
     } else {
         auto elapsed = std::chrono::steady_clock::now() - ristFixTriggerTime_;
         auto delaySec = std::chrono::seconds(config_->options.ristStaleFrameFixSec);
@@ -427,6 +429,7 @@ void Switcher::handleRistStaleFrameFix(bool offline)
                 nullptr, false);
             ristFixPending_ = false;
             ristFixFired_ = true;
+            blog(LOG_INFO, "[BitrateSceneSwitch] RIST stale frame fix completed");
         }
     }
 }
