@@ -123,6 +123,33 @@ jobs:
           cmake --build build_x64 --config Release --target libobs obs-frontend-api -- /m
           cd ..
           
+      - name: Debug OBS Build Output
+        shell: pwsh
+        run: |
+          Write-Host "=== OBS Build Directory Contents ==="
+          Get-ChildItem -Path "obs-studio/build_x64" -Recurse | ForEach-Object { 
+            if ($_.PSIsContainer) {
+              Write-Host "[DIR] $($_.FullName)"
+            } else {
+              Write-Host "[FILE] $($_.FullName)"
+            }
+          }
+          
+          Write-Host "=== Looking for obs-frontend-api ==="
+          Get-ChildItem -Path "obs-studio/build_x64" -Recurse -Filter "obs-frontend-api*" | ForEach-Object { 
+            Write-Host $_.FullName 
+          }
+          
+          Write-Host "=== Looking for libobs ==="
+          Get-ChildItem -Path "obs-studio/build_x64" -Recurse -Filter "libobs*" | ForEach-Object { 
+            Write-Host $_.FullName 
+          }
+          
+          Write-Host "=== Looking for w32-pthreads ==="
+          Get-ChildItem -Path "obs-studio/build_x64" -Recurse -Filter "*pthread*" | ForEach-Object { 
+            Write-Host $_.FullName 
+          }
+          
       - name: Configure Plugin (x64)
         shell: pwsh
         run: |
@@ -131,6 +158,19 @@ jobs:
           $depsDir = "${{ github.workspace }}/obs-deps"
           $simdeDir = "${{ github.workspace }}/simde-install"
           $obsBuildDir = "$obsDir/build_x64"
+          
+          # DEBUG: List contents of build directories
+          Write-Host "=== DEBUG: Contents of obsBuildDir ==="
+          Get-ChildItem -Path $obsBuildDir -Recurse -Directory | ForEach-Object { Write-Host $_.FullName }
+          
+          Write-Host "=== DEBUG: Looking for obs-frontend-api ==="
+          Get-ChildItem -Path $obsBuildDir -Recurse -Filter "*frontend*" | ForEach-Object { Write-Host $_.FullName }
+          
+          Write-Host "=== DEBUG: Looking for libobs ==="
+          Get-ChildItem -Path $obsBuildDir -Recurse -Filter "*libobs*" | ForEach-Object { Write-Host $_.FullName }
+          
+          Write-Host "=== DEBUG: Looking for w32-pthreads ==="
+          Get-ChildItem -Path $obsBuildDir -Recurse -Filter "*pthread*" | ForEach-Object { Write-Host $_.FullName }
           
           # Find curl library
           $curlLib = Get-ChildItem -Path $curlDir -Filter "*.dll.a" -Recurse | Select-Object -First 1
@@ -156,6 +196,7 @@ jobs:
           Write-Host "CURL Include: $curlIncludePath"
           Write-Host "Deps Dir: $depsDir"
           Write-Host "SIMDe Dir: $simdeDir"
+          Write-Host "OBS Build Dir: $obsBuildDir"
           
           cmake -B build -S . -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
