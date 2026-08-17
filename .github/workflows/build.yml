@@ -12,7 +12,7 @@ env:
   PLUGIN_NAME: BitrateSceneSwitch
 
 jobs:
-  build-windows-x64:
+    build-windows-x64:
     name: Build for Windows x64
     runs-on: windows-2022
     steps:
@@ -30,13 +30,28 @@ jobs:
           version: '6.7.2'
           arch: 'win64_msvc2019_64'
           cache: true
+
+      # ---------- ADD SIMDe ----------
+      - name: Cache SIMDe
+        id: cache-simde
+        uses: actions/cache@v4
+        with:
+          path: simde
+          key: simde-x64-v1
           
+      - name: Download SIMDe
+        if: steps.cache-simde.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/simd-everywhere/simde.git simde
+          
+      # ---------- OBS Source ----------
       - name: Cache OBS Studio source
         id: cache-obs
         uses: actions/cache@v4
         with:
           path: obs-studio
-          key: obs-studio-official-x64-update
+          key: obs-studio-official-x64-32.2.1-v2
           
       - name: Clone OBS Studio (official)
         if: steps.cache-obs.outputs.cache-hit != 'true'
@@ -47,12 +62,13 @@ jobs:
           git submodule update --init --recursive --depth 1
           cd ..
           
+      # ---------- OBS Deps ----------
       - name: Cache OBS deps
         id: cache-deps
         uses: actions/cache@v4
         with:
           path: obs-deps
-          key: obs-deps-2026-07-15-x64
+          key: obs-deps-2026-07-15-x64-v2
           
       - name: Download OBS deps
         if: steps.cache-deps.outputs.cache-hit != 'true'
@@ -62,6 +78,7 @@ jobs:
           Invoke-WebRequest -Uri $depsUrl -OutFile deps.zip
           Expand-Archive deps.zip -DestinationPath obs-deps
           
+      # ---------- CURL ----------
       - name: Cache CURL
         id: cache-curl
         uses: actions/cache@v4
@@ -95,27 +112,38 @@ jobs:
           # Cleanup
           Remove-Item curl-temp -Recurse -Force
           
+      # ---------- OBS Build ----------
       - name: Cache OBS build
         id: cache-obs-build
         uses: actions/cache@v4
         with:
           path: obs-studio/build_x64
-          key: obs-build-official-x64-update
+          key: obs-build-official-x64-32.2.1-v2
           
       - name: Build OBS Libraries (x64)
         if: steps.cache-obs-build.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           cd obs-studio
-          cmake -B build_x64 -S . -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DENABLE_BROWSER=OFF -DENABLE_SCRIPTING=OFF -DENABLE_UI=ON -DENABLE_PLUGINS=OFF -DENABLE_VIRTUALCAM=OFF -DCMAKE_PREFIX_PATH="${{ github.workspace }}/obs-deps"
+          cmake -B build_x64 -S . -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DSIMDe_DIR="${{ github.workspace }}/simde" `
+            -DENABLE_BROWSER=OFF `
+            -DENABLE_SCRIPTING=OFF `
+            -DENABLE_UI=ON `
+            -DENABLE_PLUGINS=OFF `
+            -DENABLE_VIRTUALCAM=OFF `
+            -DCMAKE_PREFIX_PATH="${{ github.workspace }}/obs-deps"
           cmake --build build_x64 --config Release --target libobs obs-frontend-api -- /m
           cd ..
           
+      # ---------- Configure Plugin ----------
       - name: Configure Plugin (x64)
         shell: pwsh
         run: |
           $obsDir = "${{ github.workspace }}/obs-studio"
           $curlDir = "${{ github.workspace }}/curl"
+          $simdeDir = "${{ github.workspace }}/simde"
           $obsBuildDir = "$obsDir/build_x64"
           
           # Find curl library
@@ -140,6 +168,7 @@ jobs:
           
           Write-Host "CURL Library: $curlLibPath"
           Write-Host "CURL Include: $curlIncludePath"
+          Write-Host "SIMDe Dir: $simdeDir"
           
           cmake -B build -S . -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
@@ -147,6 +176,7 @@ jobs:
             -Dlibobs_DIR="$obsBuildDir/libobs" `
             -Dobs-frontend-api_DIR="$obsBuildDir/UI/obs-frontend-api" `
             -Dw32-pthreads_DIR="$obsBuildDir/deps/w32-pthreads" `
+            -DSIMDe_DIR="$simdeDir" `
             -DCURL_INCLUDE_DIR="$curlIncludePath" `
             -DCURL_LIBRARY="$curlLibPath"
             
