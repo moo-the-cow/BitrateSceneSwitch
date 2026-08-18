@@ -972,8 +972,9 @@ QWidget *SettingsDialog::createAdvancedPage()
     ristStaleFrameFixSpinBox_->setToolTip("Auto-refresh RIST media sources after going offline (0 = disabled)");
 
     QLabel *ristHint = new QLabel(
-        "RIST encoders leave a frozen frame when the stream stops. "
-        "This will refresh the source after the configured delay. Set to 0 to disable.", page);
+        "RIST encoders can leave a frozen frame when the stream stops. "
+        "This clears the displayed frame and requests a safe playback restart after the configured delay. "
+        "Set to 0 to disable.", page);
     ristHint->setWordWrap(true);
     ristHint->setStyleSheet("color: #a6adc8; font-size: 11px; padding: 4px;");
 
