@@ -369,6 +369,7 @@ void Switcher::doSwitchCheck()
 
 void Switcher::handleRistStaleFrameFix(bool offline)
 {
+	blog(LOG_INFO, "MOO0000000 [BitrateSceneSwitch] RIST fix called with offline=%d", offline);
     if (config_->options.ristStaleFrameFixSec == 0)
         return;
 	blog(LOG_INFO, "MOO1 [BitrateSceneSwitch] RIST fix called with offline=%d", offline);
