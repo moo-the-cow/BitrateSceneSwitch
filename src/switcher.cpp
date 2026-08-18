@@ -373,19 +373,16 @@ void Switcher::handleRistStaleFrameFix(bool offline)
         return;
 
     if (offline) {
-        // Remove the hasBeenOnline_ check to allow first-time offline detection
-        // if (!hasBeenOnline_ || ristFixFired_)
-        //     return;
+        if (!hasBeenOnline_ || ristFixFired_)
+            return;
 
         if (!ristFixPending_) {
             ristFixPending_ = true;
             ristFixTriggerTime_ = std::chrono::steady_clock::now();
-            blog(LOG_INFO, "[BitrateSceneSwitch] RIST stale frame fix: offline detected, will attempt fix in %u seconds",
-                 config_->options.ristStaleFrameFixSec);
         } else {
             auto elapsed = std::chrono::steady_clock::now() - ristFixTriggerTime_;
             auto delaySec = std::chrono::seconds(config_->options.ristStaleFrameFixSec);
-            if (elapsed >= delaySec && !ristFixFired_) {
+            if (elapsed >= delaySec) {
                 blog(LOG_INFO, "[BitrateSceneSwitch] RIST stale frame fix: refreshing media sources after %u sec offline",
                      config_->options.ristStaleFrameFixSec);
                 obs_queue_task(
@@ -404,19 +401,17 @@ void Switcher::handleRistStaleFrameFix(bool offline)
                                 if (!settings)
                                     return true;
                                 const char *input = obs_data_get_string(settings, "input");
-                                
-                                // Check for RIST input (case insensitive)
-                                bool isRist = false;
-                                if (input && *input) {
-                                    std::string inputStr = input;
-                                    std::transform(inputStr.begin(), inputStr.end(), 
-                                                 inputStr.begin(), ::tolower);
-                                    isRist = inputStr.rfind("rist", 0) == 0;
-                                }
+                                bool isRist = input && *input &&
+                                              (strncmp(input, "rist", 4) == 0 ||
+                                               strncmp(input, "RIST", 4) == 0);
                                 obs_data_release(settings);
 
                                 if (isRist) {
-                                    obs_source_media_restart(source);
+                                    //obs_source_media_restart(source);
+									obs_source_set_enabled(source, false);
+								    // Small delay might be needed
+								    os_sleep_ms(100);
+								    obs_source_set_enabled(source, true);
                                     blog(LOG_INFO,
                                          "[BitrateSceneSwitch] RIST fix: restarted %s",
                                          obs_source_get_name(source));
@@ -426,18 +421,14 @@ void Switcher::handleRistStaleFrameFix(bool offline)
                             nullptr);
                     },
                     nullptr, false);
-                ristFixFired_ = true;
                 ristFixPending_ = false;
+                ristFixFired_ = true;
             }
         }
     } else {
-        // When back online, reset for next offline event
         hasBeenOnline_ = true;
-        if (ristFixPending_ || ristFixFired_) {
-            blog(LOG_INFO, "[BitrateSceneSwitch] RIST stale frame fix: back online, resetting fix state");
-            ristFixPending_ = false;
-            ristFixFired_ = false;
-        }
+        ristFixPending_ = false;
+        ristFixFired_ = false;
     }
 }
 
