@@ -371,18 +371,22 @@ void Switcher::handleRistStaleFrameFix(bool offline)
 {
     if (config_->options.ristStaleFrameFixSec == 0)
         return;
-
+	blog(LOG_INFO, "MOO1 [BitrateSceneSwitch] RIST fix called with offline=%d", offline);
     if (offline) {
+		blog(LOG_INFO, "MOO2 [BitrateSceneSwitch] RIST fix called with offline=%d", offline);
         if (!hasBeenOnline_ || ristFixFired_)
             return;
+		blog(LOG_INFO, "MOO3 [BitrateSceneSwitch] RIST fix called with offline=%d", offline);
 
         if (!ristFixPending_) {
             ristFixPending_ = true;
             ristFixTriggerTime_ = std::chrono::steady_clock::now();
         } else {
+			blog(LOG_INFO, "MOO4 [BitrateSceneSwitch] RIST fix called with offline=%d", offline);
             auto elapsed = std::chrono::steady_clock::now() - ristFixTriggerTime_;
             auto delaySec = std::chrono::seconds(config_->options.ristStaleFrameFixSec);
             if (elapsed >= delaySec) {
+				blog(LOG_INFO, "MOO5 [BitrateSceneSwitch] RIST fix called with offline=%d", offline);
                 blog(LOG_INFO, "[BitrateSceneSwitch] RIST stale frame fix: refreshing media sources after %u sec offline",
                      config_->options.ristStaleFrameFixSec);
                 obs_queue_task(
@@ -407,11 +411,7 @@ void Switcher::handleRistStaleFrameFix(bool offline)
                                 obs_data_release(settings);
 
                                 if (isRist) {
-                                    //obs_source_media_restart(source);
-									obs_source_set_enabled(source, false);
-								    // Small delay might be needed
-								    os_sleep_ms(100);
-								    obs_source_set_enabled(source, true);
+                                    obs_source_media_restart(source);
                                     blog(LOG_INFO,
                                          "[BitrateSceneSwitch] RIST fix: restarted %s",
                                          obs_source_get_name(source));
